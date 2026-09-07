@@ -1,0 +1,25 @@
+app = "podsen"
+primary_region = "iad"
+
+[build]
+
+[env]
+  FLASK_ENV = "production"
+  DATA_DIR = "/data"
+  PORT = "3000"
+  # Ranking backend: "claude" (default) or "ollama".
+  RANK_BACKEND = "claude"
+  # For RANK_BACKEND=ollama only: OLLAMA_BASE_URL must be set via `fly secrets set`
+  # to an Ollama this container can reach. The default (http://localhost:11434/v1)
+  # resolves to THIS container, which has no Ollama in it — not to your laptop.
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[mounts]]
+  source = "podsen_data"
+  destination = "/data"

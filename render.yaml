@@ -1,0 +1,39 @@
+# Render Blueprint. Free plan works but /data resets on each deploy;
+# the Starter plan keeps the disk (feedback log) between deploys.
+services:
+  - type: web
+    name: podsen
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    # --timeout 300: triage blocks on the ranking call; the 30s default would kill it.
+    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT --timeout 300 app:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: DATA_DIR
+        value: /data
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_KEY
+        generateValue: true
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: BASE_URL
+        sync: false
+      # Ranking backend: "claude" (default) or "ollama".
+      - key: RANK_BACKEND
+        value: claude
+      # Required when RANK_BACKEND=claude:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Only used when RANK_BACKEND=ollama. Must be an Ollama this container can
+      # reach over the network — localhost here is the CONTAINER, not your laptop.
+      - key: OLLAMA_BASE_URL
+        sync: false
+    disk:
+      name: podsen-data
+      mountPath: /data
+      sizeGB: 1
