@@ -7,11 +7,15 @@ primary_region = "iad"
   FLASK_ENV = "production"
   DATA_DIR = "/data"
   PORT = "3000"
-  # Ranking backend: "claude" (default) or "ollama".
-  RANK_BACKEND = "claude"
-  # For RANK_BACKEND=ollama only: OLLAMA_BASE_URL must be set via `fly secrets set`
-  # to an Ollama this container can reach. The default (http://localhost:11434/v1)
-  # resolves to THIS container, which has no Ollama in it — not to your laptop.
+
+  # HEADS UP: Podsen now ranks on a LOCAL Ollama by default, and this container has
+  # no Ollama in it — localhost:11434 here is the container, not your laptop. As
+  # written, a deploy from this file WILL fail at the first triage.
+  #
+  # See the README: running locally + a cloudflared tunnel is the recommended setup
+  # and needs none of this. To deploy anyway, pick one and set it via `fly secrets set`:
+  #   1. OLLAMA_BASE_URL=https://<your-tunnel-or-gpu-box>   (reachable Ollama)
+  #   2. RANK_BACKEND=claude + ANTHROPIC_API_KEY            (no Ollama needed)
 
 [http_service]
   internal_port = 3000

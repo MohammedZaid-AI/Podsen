@@ -1,5 +1,12 @@
 # Render Blueprint. Free plan works but /data resets on each deploy;
 # the Starter plan keeps the disk (feedback log) between deploys.
+#
+# HEADS UP: Podsen now ranks on a LOCAL Ollama by default, and this container has no
+# Ollama in it — localhost:11434 here is the container, not your laptop. As written a
+# deploy from this file WILL fail at the first triage. Running locally behind a
+# cloudflared tunnel (see README) is the recommended setup and needs none of this.
+# To deploy anyway, set EITHER OLLAMA_BASE_URL to a reachable Ollama, OR
+# RANK_BACKEND=claude plus ANTHROPIC_API_KEY.
 services:
   - type: web
     name: podsen
@@ -23,15 +30,16 @@ services:
         sync: false
       - key: BASE_URL
         sync: false
-      # Ranking backend: "claude" (default) or "ollama".
+      # Ranking backend: "ollama" (default) or "claude".
       - key: RANK_BACKEND
-        value: claude
-      # Required when RANK_BACKEND=claude:
-      - key: ANTHROPIC_API_KEY
         sync: false
-      # Only used when RANK_BACKEND=ollama. Must be an Ollama this container can
-      # reach over the network — localhost here is the CONTAINER, not your laptop.
+      # Must be an Ollama this container can reach over the network — localhost
+      # here is the CONTAINER, not your laptop. Required unless you set
+      # RANK_BACKEND=claude below.
       - key: OLLAMA_BASE_URL
+        sync: false
+      # Only required when RANK_BACKEND=claude:
+      - key: ANTHROPIC_API_KEY
         sync: false
     disk:
       name: podsen-data
