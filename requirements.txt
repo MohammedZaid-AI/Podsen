@@ -1,0 +1,5 @@
+flask>=3.0
+requests>=2.32
+anthropic>=1.0
+gunicorn>=23.0
+python-dotenv>=1.0
