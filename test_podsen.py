@@ -99,9 +99,35 @@ def test_parse_never_lists_an_episode_as_both_pick_and_skip():
 
 # --- backend selection --------------------------------------------------------
 
-def test_default_backend_is_claude(monkeypatch):
+def test_default_backend_is_ollama(monkeypatch):
+    """No API key required out of the box: the local backend is the default."""
     monkeypatch.delenv("RANK_BACKEND", raising=False)
-    assert rank_mod._backend_name() == "claude"
+    assert rank_mod._backend_name() == "ollama"
+
+
+def test_claude_is_never_reached_without_being_asked_for(monkeypatch):
+    """An absent ANTHROPIC_API_KEY must not break the default path."""
+    monkeypatch.delenv("RANK_BACKEND", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+    def boom():
+        raise AssertionError("Claude client must not be constructed on the ollama path")
+
+    monkeypatch.setattr(rank_mod, "_anthropic", boom)
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    monkeypatch.setattr(
+        rank_mod.requests, "post", lambda *a, **k: FakeOllama({"message": {"content": ANSWER}})
+    )
+    assert [p["id"] for p in rank_mod.rank(CANDIDATES, 30)["picks"]] == ["e1"]
+
+
+def test_claude_without_a_key_says_so_clearly(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(rank_mod, "_client", None)
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        rank_mod._anthropic()
 
 
 def test_unknown_backend_is_rejected(monkeypatch):
@@ -137,67 +163,197 @@ def test_claude_backend_end_to_end(monkeypatch):
     assert "30 minutes" in seen["messages"][0]["content"]
 
 
+class FakeOllama:
+    """Minimal stand-in for a native /api/chat response."""
+
+    def __init__(self, payload, status=200):
+        self.status_code = status
+        self.ok = 200 <= status < 300
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
 def test_ollama_backend_end_to_end(monkeypatch):
     monkeypatch.setenv("RANK_BACKEND", "ollama")
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
     seen = {}
 
     def fake_post(url, **kw):
         seen["url"] = url
         seen["json"] = kw["json"]
-        seen["headers"] = kw["headers"]
-        return types.SimpleNamespace(
-            ok=True,
-            status_code=200,
-            json=lambda: {"choices": [{"finish_reason": "stop", "message": {"content": ANSWER}}]},
-        )
+        return FakeOllama({"done_reason": "stop", "message": {"content": ANSWER}})
 
     monkeypatch.setattr(rank_mod.requests, "post", fake_post)
     out = rank_mod.rank(CANDIDATES, 45)
 
     assert [p["id"] for p in out["picks"]] == ["e1"]
-    assert seen["url"].endswith("/chat/completions")
+    # native endpoint, not /v1 — only this one honours num_ctx
+    assert seen["url"].endswith("/api/chat")
     assert seen["json"]["model"] == rank_mod.OLLAMA_MODEL
-    assert seen["headers"]["Authorization"].startswith("Bearer ")
 
 
-def test_ollama_context_truncation_gives_an_actionable_error(monkeypatch):
+def test_ollama_sets_num_ctx_per_request(monkeypatch):
+    """The context fix is baked into the request, not left to a machine-wide env var."""
     monkeypatch.setenv("RANK_BACKEND", "ollama")
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    seen = {}
 
     def fake_post(url, **kw):
-        return types.SimpleNamespace(
-            ok=True,
-            status_code=200,
-            json=lambda: {
-                "usage": {"total_tokens": 4096},
-                "choices": [{"finish_reason": "length", "message": {"content": "", "reasoning": "thinking..."}}],
-            },
-        )
+        seen.update(kw["json"])
+        return FakeOllama({"done_reason": "stop", "message": {"content": ANSWER}})
 
     monkeypatch.setattr(rank_mod.requests, "post", fake_post)
-    with pytest.raises(RuntimeError, match="OLLAMA_CONTEXT_LENGTH"):
+    rank_mod.rank(CANDIDATES, 30)
+
+    assert seen["options"]["num_ctx"] == rank_mod.OLLAMA_NUM_CTX
+    assert rank_mod.OLLAMA_NUM_CTX > 4096  # above Ollama's silent default
+    assert seen["format"] == "json"
+
+
+def test_ollama_base_url_strips_legacy_v1_suffix():
+    assert rank_mod._normalize_base("http://localhost:11434/v1") == "http://localhost:11434"
+    assert rank_mod._normalize_base("http://host:11434/") == "http://host:11434"
+    assert rank_mod._normalize_base("http://host:11434") == "http://host:11434"
+
+
+def test_ollama_context_overflow_gives_an_actionable_error(monkeypatch):
+    monkeypatch.setenv("RANK_BACKEND", "ollama")
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    monkeypatch.setattr(
+        rank_mod.requests,
+        "post",
+        lambda *a, **k: FakeOllama(
+            {
+                "done_reason": "length",
+                "prompt_eval_count": 8000,
+                "eval_count": 192,
+                "message": {"content": "", "thinking": "..."},
+            }
+        ),
+    )
+    with pytest.raises(RuntimeError, match="OLLAMA_NUM_CTX"):
         rank_mod.rank(CANDIDATES, 30)
 
 
-def test_ollama_falls_back_to_reasoning_when_content_empty(monkeypatch):
+def test_ollama_falls_back_to_thinking_when_content_empty(monkeypatch):
     monkeypatch.setenv("RANK_BACKEND", "ollama")
-
-    def fake_post(url, **kw):
-        return types.SimpleNamespace(
-            ok=True,
-            status_code=200,
-            json=lambda: {"choices": [{"finish_reason": "stop", "message": {"content": "", "reasoning": ANSWER}}]},
-        )
-
-    monkeypatch.setattr(rank_mod.requests, "post", fake_post)
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    monkeypatch.setattr(
+        rank_mod.requests,
+        "post",
+        lambda *a, **k: FakeOllama({"done_reason": "stop", "message": {"content": "", "thinking": ANSWER}}),
+    )
     assert [p["id"] for p in rank_mod.rank(CANDIDATES, 30)["picks"]] == ["e1"]
 
 
+# --- preflight: fail with something the user can act on ----------------------
+
+def test_preflight_explains_when_ollama_is_down(monkeypatch):
+    monkeypatch.setattr(rank_mod, "_preflight_done", False)
+
+    def boom(*a, **k):
+        raise requests.exceptions.ConnectionError("refused")
+
+    monkeypatch.setattr(rank_mod.requests, "get", boom)
+    with pytest.raises(RuntimeError, match="Can't reach Ollama"):
+        rank_mod._preflight()
+
+
+def test_preflight_explains_when_model_not_pulled(monkeypatch):
+    monkeypatch.setattr(rank_mod, "_preflight_done", False)
+    monkeypatch.setattr(
+        rank_mod.requests,
+        "get",
+        lambda *a, **k: types.SimpleNamespace(
+            raise_for_status=lambda: None, json=lambda: {"models": [{"name": "something-else:1b"}]}
+        ),
+    )
+    with pytest.raises(RuntimeError, match=f"ollama pull {rank_mod.OLLAMA_MODEL}"):
+        rank_mod._preflight()
+
+
+def test_preflight_passes_when_model_present(monkeypatch):
+    monkeypatch.setattr(rank_mod, "_preflight_done", False)
+    monkeypatch.setattr(
+        rank_mod.requests,
+        "get",
+        lambda *a, **k: types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"models": [{"name": rank_mod.OLLAMA_MODEL}]},
+        ),
+    )
+    rank_mod._preflight()  # must not raise
+
+
+# --- malformed JSON: one corrective retry before giving up -------------------
+
+def test_bad_json_is_retried_once_and_succeeds(monkeypatch):
+    monkeypatch.setenv("RANK_BACKEND", "ollama")
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    calls = []
+
+    def fake_post(url, **kw):
+        calls.append(kw["json"]["messages"][-1]["content"])
+        # first reply has an unescaped quote inside the reason — exactly the
+        # failure seen from gemma4 in live testing
+        broken = '{"picks":[{"n":1,"reason":"he said "hello" loudly"}],"skips":[]}'
+        payload = broken if len(calls) == 1 else ANSWER
+        return FakeOllama({"done_reason": "stop", "message": {"content": payload}})
+
+    monkeypatch.setattr(rank_mod.requests, "post", fake_post)
+    out = rank_mod.rank(CANDIDATES, 30)
+
+    assert [p["id"] for p in out["picks"]] == ["e1"]
+    assert len(calls) == 2, "should have retried exactly once"
+    assert "could not be parsed as JSON" in calls[1], "retry must carry a corrective hint"
+    assert "could not be parsed" not in calls[0], "first attempt must be the clean prompt"
+
+
+def test_bad_json_twice_fails_with_a_clear_message(monkeypatch):
+    monkeypatch.setenv("RANK_BACKEND", "ollama")
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    calls = []
+
+    def fake_post(url, **kw):
+        calls.append(1)
+        return FakeOllama({"done_reason": "stop", "message": {"content": "sorry, no idea"}})
+
+    monkeypatch.setattr(rank_mod.requests, "post", fake_post)
+    with pytest.raises(RuntimeError, match="unparseable JSON twice"):
+        rank_mod.rank(CANDIDATES, 30)
+    assert len(calls) == 2, "exactly one retry, then give up"
+
+
+def test_retry_also_covers_the_claude_backend(monkeypatch):
+    monkeypatch.setenv("RANK_BACKEND", "claude")
+    calls = []
+
+    class FakeMessages:
+        def create(self, **kw):
+            calls.append(kw["messages"][0]["content"])
+            payload = "not json at all" if len(calls) == 1 else ANSWER
+            return types.SimpleNamespace(content=[types.SimpleNamespace(type="text", text=payload)])
+
+    monkeypatch.setattr(
+        rank_mod, "_anthropic", lambda: types.SimpleNamespace(messages=FakeMessages())
+    )
+    assert [p["id"] for p in rank_mod.rank(CANDIDATES, 30)["picks"]] == ["e1"]
+    assert len(calls) == 2
+
+
 def test_backends_send_different_backlog_sizes():
-    """Ollama's tighter context means a smaller prompt; Claude gets the full backlog."""
-    many = [dict(CANDIDATES[0], id=f"e{i}") for i in range(60)]
-    c_cands, _ = rank_mod.build_prompt(many, 30, *rank_mod.LIMITS["claude"])
-    o_cands, _ = rank_mod.build_prompt(many, 30, *rank_mod.LIMITS["ollama"])
-    assert len(c_cands) == 50 and len(o_cands) == 30
+    """The local model gets a smaller prompt than Claude; both honour their LIMITS."""
+    many = [dict(CANDIDATES[0], id=f"e{i}") for i in range(80)]
+    c_max, c_chars = rank_mod.LIMITS["claude"]
+    o_max, o_chars = rank_mod.LIMITS["ollama"]
+
+    c_cands, _ = rank_mod.build_prompt(many, 30, c_max, c_chars)
+    o_cands, _ = rank_mod.build_prompt(many, 30, o_max, o_chars)
+
+    assert len(c_cands) == c_max and len(o_cands) == o_max
+    assert o_max <= c_max and o_chars <= c_chars, "local prompt must not exceed Claude's"
 
 
 # --- event store: format must stay readable by the old Node events.jsonl ------
