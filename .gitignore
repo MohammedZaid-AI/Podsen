@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/
+.env
+
+# legacy Node version, kept only until the Python port is signed off
+legacy-js/node_modules/
