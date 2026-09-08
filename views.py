@@ -117,6 +117,20 @@ def dropped_note(dropped) -> str:
     )
 
 
+def nothing_fits(minutes: int, shortest: int | None, backlog: int, dropped=None) -> str:
+    """Say the budget can't be met rather than returning something twice as long."""
+    tail = (
+        f" The shortest unheard episode you have is <strong>{esc(shortest)} min</strong>."
+        if shortest
+        else ""
+    )
+    return f"""<p class="meta">{esc(backlog)} unheard episodes &middot; {esc(minutes)} min budget</p>
+<p class="warn">Nothing in your backlog fits {esc(minutes)} minutes.{tail}
+Try a longer window rather than starting something you can't finish.</p>
+{dropped_note(dropped)}
+<p style="margin-top:20px"><a class="btn" href="/app">Pick a different time</a></p>"""
+
+
 def results(sid, minutes, picks, skips, backlog, shows_scanned, dropped=None) -> str:
     def pick(p):
         return f"""<div class="card pick">
@@ -160,6 +174,14 @@ def done(sid, picks, playlist) -> str:
             f'<p style="margin:16px 0"><a class="btn" href="{esc(playlist["url"])}" '
             'target="_blank" rel="noopener">Open playlist in Spotify</a></p>'
         )
+        # Spotify sometimes refuses to make a playlist private. Never let the UI imply
+        # privacy we could not actually confirm.
+        if playlist.get("public"):
+            pl += (
+                '<p class="warn">Spotify made this playlist <strong>public</strong> '
+                "despite the request to keep it private &mdash; anyone with the link can "
+                "see it. You can switch it to private in Spotify.</p>"
+            )
     return f"""<h2>Confirmed</h2>
 {body}
 {pl}

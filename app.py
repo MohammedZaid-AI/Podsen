@@ -95,6 +95,12 @@ def triage():
 
     ranked = rank(episodes, minutes)
     picks, skips = ranked["picks"], ranked["skips"]
+
+    if ranked.get("shortest_unfit"):
+        return views.page(
+            "Podsen",
+            views.nothing_fits(minutes, ranked["shortest_unfit"], len(episodes), dropped),
+        )
     sid = str(uuid.uuid4())
     append(
         "events.jsonl",

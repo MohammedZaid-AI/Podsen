@@ -37,6 +37,9 @@ def _backend_name() -> str:
 # num_ctx set per request, ollama's ceiling is now RAM, not Ollama's 4096 default.
 LIMITS = {"claude": (50, 600), "ollama": (40, 450)}
 
+# A 62-minute episode is a fine answer to "I have an hour"; a 95-minute one is not.
+BUDGET_TOLERANCE = 1.10
+
 # --- Anthropic (kept working, but off the default path) ----------------------
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 _client = None
@@ -81,14 +84,14 @@ _preflight_done = False
 
 SYSTEM = """You are Podsen, a podcast triage assistant. Tagline: "Listen to what's worth it."
 The user already follows every show below and has a backlog of unheard episodes. Given how much time they have RIGHT NOW, pick the 1-2 episodes genuinely worth hearing today and list 3-6 that are safe to skip.
-Judge on: topical substance, timeliness (news/interview-of-the-moment decays fast; evergreen deep-dives don't), and fit to the time budget (an episode much longer than the budget is a poor fit unless exceptional; a couple of short ones can stack).
+Judge on: topical substance, timeliness (news/interview-of-the-moment decays fast; evergreen deep-dives don't), and whether it earns the slot. Every episode listed ALREADY fits the time budget, so never judge on length and never mention running time.
 This is triage of shows they chose to follow - not discovery, and never suggest unfollowing.
 Prefer picks from different shows: two episodes of the same podcast is a worse listening hour than two good episodes from different ones, unless one is clearly outstanding.
 Every reason is ONE sentence that names something concrete from that episode's own title or description - a person, a claim, an event, a question it takes up. A reason that would still make sense pasted under a different episode is wrong. Never write filler like "sounds interesting", "a good listen", or "worth your time".
 
 A pick's reason must say why it earns the listening time they have - what they get out of it - not merely restate the blurb.
 
-A skip's reason must say why it KEEPS, and each one must give a different kind of reason. Draw on: it is evergreen and will be just as good next month; it is a re-run or "Best Of"; its news hook has already been overtaken; it is a niche or narrow-interest instalment of a show they otherwise like; the same ground is covered by a pick. Running time alone is NEVER a sufficient reason - do not write "it is N minutes long"; if length is the issue, say what they would be giving up the rest of the day to fit it in."""
+A skip's reason must say why it KEEPS, and each one must give a different kind of reason. Draw on: it is evergreen and will be just as good next month; it is a re-run or "Best Of"; its news hook has already been overtaken; it is a niche or narrow-interest instalment of a show they otherwise like; the same ground is covered by a pick. Running time is NEVER a reason - every episode listed already fits, so "it is N minutes long" is always wrong."""
 
 REPAIR_HINT = (
     "\n\nYour previous reply could not be parsed as JSON ({err}). "
@@ -116,6 +119,24 @@ def extract_json(text: str) -> dict:
         if isinstance(obj, dict) and ("picks" in obj or "skips" in obj):
             return obj
     raise ValueError("no JSON object with picks/skips in model output")
+
+
+def fit_to_budget(episodes: list[dict], minutes: int) -> tuple[list[dict], int | None]:
+    """Keep only episodes that actually fit the time budget.
+
+    Asking an LLM to respect a hard numeric constraint does not work: a local model
+    handed a 15-minute budget cheerfully picked a 61-minute episode. Duration is
+    arithmetic, so it is enforced here and the model only ever chooses among
+    episodes that already fit.
+
+    Returns (fitting, shortest_minutes_if_nothing_fits).
+    """
+    ceiling = minutes * BUDGET_TOLERANCE
+    fitting = [e for e in episodes if 0 < (e.get("duration_min") or 0) <= ceiling]
+    if fitting:
+        return fitting, None
+    durations = [e["duration_min"] for e in episodes if (e.get("duration_min") or 0) > 0]
+    return [], (min(durations) if durations else None)
 
 
 def build_prompt(episodes: list[dict], minutes: int, max_episodes: int, desc_chars: int):
@@ -248,20 +269,34 @@ def rank(episodes: list[dict], minutes: int) -> dict:
     backend = _backend_name()
     call = _BACKENDS[backend]
     max_episodes, desc_chars = LIMITS[backend]
-    candidates, user = build_prompt(episodes, minutes, max_episodes, desc_chars)
+
+    fitting, shortest = fit_to_budget(episodes, minutes)
+    if not fitting:
+        # Better to say so than to hand back something twice the length they asked for.
+        return {"picks": [], "skips": [], "shortest_unfit": shortest}
+
+    candidates, user = build_prompt(fitting, minutes, max_episodes, desc_chars)
+
+    def _checked(raw):
+        out = parse(raw, candidates)
+        # Belt and braces: candidates are pre-filtered, so this should never bite.
+        ceiling = minutes * BUDGET_TOLERANCE
+        out["picks"] = [p for p in out["picks"] if (p.get("duration_min") or 0) <= ceiling]
+        out["shortest_unfit"] = None
+        return out
 
     text = call(user)
     if not text:
         text = ""
     try:
-        return parse(text, candidates)
+        return _checked(text)
     except ValueError as first_err:
         # Local models fairly regularly break their own JSON (an unescaped quote inside
         # a reason is the one seen in practice). One corrective retry is far cheaper
         # than failing a whole triage the user waited a minute for.
         retry_user = user + REPAIR_HINT.format(err=str(first_err)[:120])
         try:
-            return parse(call(retry_user), candidates)
+            return _checked(call(retry_user))
         except ValueError as second_err:
             raise RuntimeError(
                 f"{backend} returned unparseable JSON twice "

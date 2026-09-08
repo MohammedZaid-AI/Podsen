@@ -385,6 +385,134 @@ def test_store_preserves_unicode_unescaped(tmp_path, monkeypatch):
     assert "’" in raw  # not ’
 
 
+# --- time budget is enforced in code, not left to the model ---------------------
+# Regression: a live 15-minute request returned a 61-minute episode, and a 60-minute
+# request returned 119 minutes of audio. The model does not respect hard numbers.
+
+BACKLOG = [
+    {"id": "s1", "title": "Short", "show": "A", "duration_min": 12, "description": "d"},
+    {"id": "m1", "title": "Medium", "show": "B", "duration_min": 28, "description": "d"},
+    {"id": "l1", "title": "Long", "show": "C", "duration_min": 61, "description": "d"},
+    {"id": "x1", "title": "Epic", "show": "D", "duration_min": 95, "description": "d"},
+]
+
+
+def test_budget_filter_excludes_anything_longer_than_the_budget():
+    fitting, shortest = rank_mod.fit_to_budget(BACKLOG, 15)
+    assert [e["id"] for e in fitting] == ["s1"]  # the 61-min episode must not survive
+    assert shortest is None
+
+
+def test_budget_filter_allows_a_small_overrun_only():
+    fitting, _ = rank_mod.fit_to_budget(BACKLOG, 60)
+    ids = [e["id"] for e in fitting]
+    assert "l1" in ids, "61 min for a 60 min budget is within tolerance"
+    assert "x1" not in ids, "95 min for a 60 min budget is not"
+
+
+def test_budget_filter_reports_the_shortest_when_nothing_fits():
+    fitting, shortest = rank_mod.fit_to_budget(BACKLOG, 5)
+    assert fitting == [] and shortest == 12
+
+
+def test_budget_filter_ignores_episodes_with_no_duration():
+    fitting, _ = rank_mod.fit_to_budget([{"id": "z", "duration_min": 0}] + BACKLOG, 30)
+    assert "z" not in [e["id"] for e in fitting]
+
+
+def test_rank_never_returns_a_pick_over_budget(monkeypatch):
+    """The end-to-end guarantee: 15 minutes in, nothing longer than 15 minutes out."""
+    monkeypatch.setenv("RANK_BACKEND", "ollama")
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    # model tries to pick everything it is shown, including anything long
+    greedy = json.dumps({"picks": [{"n": 1, "reason": "r"}, {"n": 2, "reason": "r"}],
+                         "skips": [{"n": 3, "reason": "k"}]})
+    monkeypatch.setattr(
+        rank_mod.requests, "post",
+        lambda *a, **k: FakeOllama({"done_reason": "stop", "message": {"content": greedy}}),
+    )
+    out = rank_mod.rank(BACKLOG, 15)
+    assert all(p["duration_min"] <= 15 * rank_mod.BUDGET_TOLERANCE for p in out["picks"])
+    assert "l1" not in [p["id"] for p in out["picks"]]
+
+
+def test_rank_says_nothing_fits_instead_of_overshooting(monkeypatch):
+    monkeypatch.setenv("RANK_BACKEND", "ollama")
+
+    def must_not_call(*a, **k):
+        raise AssertionError("model must not be called when nothing fits")
+
+    monkeypatch.setattr(rank_mod.requests, "post", must_not_call)
+    out = rank_mod.rank(BACKLOG, 5)
+    assert out["picks"] == [] and out["skips"] == []
+    assert out["shortest_unfit"] == 12
+
+
+def test_model_only_ever_sees_episodes_that_fit(monkeypatch):
+    monkeypatch.setenv("RANK_BACKEND", "ollama")
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    seen = {}
+
+    def spy(url, **kw):
+        seen["prompt"] = kw["json"]["messages"][-1]["content"]
+        return FakeOllama({"done_reason": "stop", "message": {"content": ANSWER}})
+
+    monkeypatch.setattr(rank_mod.requests, "post", spy)
+    rank_mod.rank(BACKLOG, 30)
+    assert "Epic" not in seen["prompt"] and "Long" not in seen["prompt"]
+    assert "Short" in seen["prompt"] and "Medium" in seen["prompt"]
+
+
+def test_nothing_fits_page_tells_the_user_the_shortest_option():
+    html = views.nothing_fits(15, 47, 44)
+    assert "Nothing in your backlog fits 15 minutes" in html
+    assert "47 min" in html
+
+
+# --- playlist privacy: verify, never assume -------------------------------------
+
+def test_done_page_warns_when_spotify_made_the_playlist_public():
+    html = views.done("sid", [], {"url": "https://open.spotify.com/playlist/x", "public": True})
+    assert "public" in html and 'class="warn"' in html
+
+
+def test_done_page_is_quiet_when_the_playlist_is_private():
+    html = views.done("sid", [], {"url": "https://open.spotify.com/playlist/x", "public": False})
+    assert 'class="warn"' not in html
+
+
+def test_create_playlist_forces_private_and_reports_the_real_state(monkeypatch):
+    """Spotify ignores public:false at creation, so it must be set and read back."""
+    calls = []
+
+    def fake_call(sess, path, method="GET", json_body=None, retry=True):
+        calls.append((method, path.split("?")[0], json_body))
+        if method == "POST" and path.endswith("/playlists"):
+            return {"id": "pl1", "external_urls": {"spotify": "https://x/pl1"}}
+        if method == "GET" and path.startswith("/playlists/pl1"):
+            return {"public": False}
+        return None
+
+    monkeypatch.setattr(spotify, "_call", fake_call)
+    out = spotify.create_playlist({}, "user", "n", "d", ["spotify:episode:1"])
+
+    assert out["public"] is False
+    assert ("PUT", "/playlists/pl1", {"public": False}) in calls, "must force privacy"
+    assert any(m == "GET" and p.startswith("/playlists/pl1") for m, p, _ in calls), "must verify"
+
+
+def test_create_playlist_reports_public_when_spotify_refuses(monkeypatch):
+    def fake_call(sess, path, method="GET", json_body=None, retry=True):
+        if method == "POST" and path.endswith("/playlists"):
+            return {"id": "pl1", "external_urls": {"spotify": "https://x/pl1"}}
+        if method == "GET" and path.startswith("/playlists/pl1"):
+            return {"public": True}  # what Spotify actually did in the live run
+        return None
+
+    monkeypatch.setattr(spotify, "_call", fake_call)
+    assert spotify.create_playlist({}, "user", "n", "d", [])["public"] is True
+
+
 # --- fan-out: a show that fails must be reported, never silently dropped ---------
 
 class FakeResp:

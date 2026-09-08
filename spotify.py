@@ -253,12 +253,36 @@ def get_backlog(session, max_shows: int = 50, per_show: int = 20, market: str = 
 
 
 def create_playlist(session, user_id: str, name: str, description: str, uris: list[str]) -> dict:
+    """Create a private playlist and verify it is actually private.
+
+    Spotify does not reliably honour `public: false` at creation time - a playlist
+    created this way was confirmed readable with an app-only token, i.e. public. So
+    the flag is forced with a follow-up PUT and then read back, and the real state is
+    returned rather than assumed. The UI promises privacy; it has to be true.
+    """
     pl = _call(
         session,
         f"/users/{quote(user_id)}/playlists",
         method="POST",
         json_body={"name": name, "public": False, "description": description},
     )
+    pid = pl["id"]
     if uris:
-        _call(session, f"/playlists/{pl['id']}/tracks", method="POST", json_body={"uris": uris})
-    return {"url": (pl.get("external_urls") or {}).get("spotify"), "id": pl["id"]}
+        _call(session, f"/playlists/{pid}/tracks", method="POST", json_body={"uris": uris})
+
+    try:
+        _call(session, f"/playlists/{pid}", method="PUT", json_body={"public": False})
+    except Exception:
+        pass  # playlist exists either way; the read-back below reports the truth
+
+    is_public = True  # assume the worse of the two until confirmed otherwise
+    try:
+        is_public = bool((_call(session, f"/playlists/{pid}?fields=public") or {}).get("public"))
+    except Exception:
+        pass
+
+    return {
+        "url": (pl.get("external_urls") or {}).get("spotify"),
+        "id": pid,
+        "public": is_public,
+    }
