@@ -35,7 +35,7 @@ def authed() -> bool:
 def index():
     if authed():
         return redirect("/app")
-    return views.page("Podsen", views.landing())
+    return views.page("Podsen", views.landing(), hero=True)
 
 
 @app.get("/login")

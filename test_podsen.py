@@ -547,5 +547,31 @@ def test_views_escape_episode_titles():
     assert "&lt;script&gt;" in html
 
 
-def test_page_renders_tagline():
-    assert "Listen to what's worth it." in views.page("Podsen", "<p>hi</p>")
+def test_page_renders_tagline_in_two_parts():
+    """The tagline is one sentence split into an italic lede and an upright rest."""
+    html = views.page("Podsen", "<p>hi</p>")
+    assert f'<span class="lede">{views.HERO_LEDE}</span>' in html
+    assert f'<span class="rest">{views.HERO_REST}</span>' in html
+    # reassembling the spans must give back the original sentence
+    assert f"{views.HERO_LEDE} {views.HERO_REST}" == "Listen to what's worth it."
+
+
+def test_hero_only_on_the_landing_page():
+    """Display type is for the hero; inner pages keep it at brand size."""
+    hero = views.page("Podsen", "<p>hi</p>", hero=True)
+    inner = views.page("Podsen", "<p>hi</p>")
+    assert '<h1 class="hero">' in hero and '<p class="wordmark">' in hero
+    assert '<h1 class="hero">' not in inner and '<p class="tagline">' in inner
+
+
+def test_every_page_has_exactly_one_h1():
+    for html in (views.page("Podsen", "<p>hi</p>", hero=True), views.page("Podsen", "<p>hi</p>")):
+        assert html.count("<h1") == 1
+
+
+def test_accent_colour_is_a_variable_not_a_literal():
+    html = views.page("Podsen", "<p>hi</p>", hero=True)
+    assert "--accent-coral: #E8637A;" in html
+    assert "color: var(--accent-coral);" in html
+    # the coral must not be hardcoded anywhere outside the token definition
+    assert html.count("#E8637A") == 1
