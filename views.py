@@ -49,6 +49,8 @@ def page(title: str, body: str, hero: bool = False) -> str:
     margin: 0 0 30px; }}
   .tagline {{ font-family: var(--display-serif); font-size: 16px; line-height: 1.3;
     margin: 0 0 28px; }}
+  .standfirst {{ font-family: var(--display-serif); font-size: 21px; line-height: 1.35;
+    color: var(--ink-display); margin: 0 0 14px; }}
   .lede {{ font-style: italic; font-weight: 600; color: var(--accent-coral); }}
   .rest {{ font-style: normal; font-weight: 700; color: var(--ink-display); }}
   h2 {{ font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: #9aa0a6; margin: 32px 0 12px; }}
@@ -77,9 +79,11 @@ def page(title: str, body: str, hero: bool = False) -> str:
 
 
 def landing() -> str:
-    return """<p>Podsen looks at the unheard episodes piling up across shows you already follow,
-and &mdash; given how much time you have right now &mdash; tells you the 1&ndash;2 worth playing today,
-plus what's safe to skip. It never deletes or skips anything without you confirming.</p>
+    return """<p class="standfirst">Your backlog isn't a debt.</p>
+<p>Podsen weighs every unheard episode across the shows you follow against the time
+you've actually got &mdash; then names the one or two worth playing right now, and what
+you can let go of, guilt-free.</p>
+<p class="meta">Nothing is skipped or deleted unless you say so.</p>
 <p style="margin-top:24px"><a class="btn" href="/login">Connect Spotify</a></p>"""
 
 
