@@ -11,7 +11,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import spotify
 import views
 from rank import rank
-from store import append, read_all
+from store import append, read_all, read_prefs, write_pref
 
 app = Flask(__name__)
 # Behind Fly/Render TLS termination, trust one proxy hop so redirect_uri stays https.
@@ -62,27 +62,73 @@ def callback():
     return redirect("/app")
 
 
+def _selected_shows(user_id: str) -> set | None:
+    """Stored show selection, or None meaning "all" (incl. shows followed later)."""
+    saved = read_prefs(user_id).get("shows")
+    return set(saved) if saved else None
+
+
 @app.get("/app")
 def app_home():
     if not authed():
         return redirect("/")
-    return views.page("Podsen", views.time_form(session.get("user")))
+    user = session.get("user") or {}
+    shows = spotify.get_followed_shows(session)
+    return views.page(
+        "Podsen",
+        views.time_form(user, shows, _selected_shows(user.get("id"))),
+    )
+
+
+@app.get("/shows/all")
+def shows_all():
+    """Reset to scanning everything. Clearing the pref (rather than storing every id)
+    means shows followed later are included automatically."""
+    if not authed():
+        return redirect("/")
+    write_pref((session.get("user") or {}).get("id"), "shows", None)
+    return redirect("/app")
 
 
 @app.post("/triage")
 def triage():
     if not authed():
         return redirect("/")
+    raw = request.form.get("minutes", "30")
+    if raw == "custom":  # the number box, not one of the preset buttons
+        raw = request.form.get("custom_minutes", "30")
     try:
-        minutes = int(request.form.get("minutes", 30))
+        minutes = int(raw)
     except ValueError:
         minutes = 30
     minutes = max(1, min(600, minutes))
 
     user = session.get("user") or {}
-    result = spotify.get_backlog(session, market=user.get("country") or "US")
+    # An empty list means the user unticked everything, which is not the same as
+    # "no preference" - say so rather than returning a confusingly empty triage.
+    picked = [sid for sid in request.form.getlist("show") if sid]
+    if request.form.get("show_picker") and not picked:
+        return views.page(
+            "Podsen",
+            '<p class="warn">Select at least one show to scan.</p>'
+            '<p style="margin-top:20px"><a class="btn" href="/app">Back</a></p>',
+        )
+    selected = set(picked) if picked else _selected_shows(user.get("id"))
+
+    result = spotify.get_backlog(
+        session, market=user.get("country") or "US", selected_ids=selected
+    )
     episodes, shows_scanned = result["episodes"], result["showsScanned"]
     dropped = result.get("dropped") or []
+
+    # Remember the scope for next time. All-selected is stored as "no preference" so a
+    # newly followed show is picked up automatically instead of being silently excluded.
+    if picked:
+        write_pref(
+            user.get("id"),
+            "shows",
+            None if result["showsSelected"] >= result["showsFollowed"] else picked,
+        )
 
     if not episodes:
         return views.page(
@@ -111,6 +157,7 @@ def triage():
             "minutes": minutes,
             "backlog": len(episodes),
             "showsScanned": shows_scanned,
+            "showsSelected": result.get("showsSelected"),
             "showsFollowed": result.get("showsFollowed"),
             "dropped": dropped,
             "picks": [
@@ -125,7 +172,10 @@ def triage():
     )
     return views.page(
         "Podsen",
-        views.results(sid, minutes, picks, skips, len(episodes), shows_scanned, dropped),
+        views.results(
+            sid, minutes, picks, skips, len(episodes), shows_scanned, dropped,
+            shows_followed=result.get("showsFollowed"),
+        ),
     )
 
 
