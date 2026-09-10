@@ -69,6 +69,11 @@ def page(title: str, body: str, hero: bool = False) -> str:
   .row {{ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }}
   textarea {{ width: 100%; font: inherit; background: #16171b; color: #e9e9ec; border: 1px solid #2a2c31; border-radius: 8px; padding: 10px; }}
   a {{ color: #6fd08c; }}
+  .shows {{ border: 1px solid #2a2c31; border-radius: 10px; padding: 10px 14px;
+    margin: 0 0 24px; background: #16171b; }}
+  .shows summary {{ cursor: pointer; color: #9aa0a6; font-size: 14px; }}
+  .showlist {{ margin-top: 10px; max-height: 320px; overflow-y: auto; }}
+  .showlist label {{ font-size: 15px; }}
   .warn {{ border: 1px solid #5a4a1e; background: #241f12; color: #e8d9a8;
     border-radius: 10px; padding: 12px 14px; margin: 12px 0 0; font-size: 14px; }}
   pre {{ white-space: pre-wrap; word-break: break-word; }}
@@ -87,18 +92,59 @@ you can let go of, guilt-free.</p>
 <p style="margin-top:24px"><a class="btn" href="/login">Connect Spotify</a></p>"""
 
 
-def time_form(user: dict | None) -> str:
+def show_picker(shows: list[dict], selected: set | None) -> str:
+    """Which shows this run covers. Collapsed by default so the common path is one click.
+
+    <details> is a native element - no client JS, matching the rest of the app.
+    `selected=None` means every show, including any followed later.
+    """
+    if not shows:
+        return ""
+    total = len(shows)
+    chosen = [sh for sh in shows if selected is None or sh.get("id") in selected]
+    n = len(chosen)
+
+    if selected is None or n == total:
+        summary = f"Scanning all {total} shows"
+    else:
+        summary = f"Scanning {n} of your {total} shows"
+
+    boxes = "".join(
+        '<label><input type="checkbox" name="show" value="{sid}"{checked}> {name}</label>'.format(
+            sid=esc(sh.get("id")),
+            checked=" checked" if (selected is None or sh.get("id") in selected) else "",
+            name=esc(sh.get("name")),
+        )
+        for sh in shows
+    )
+    reset = (
+        '' if (selected is None or n == total)
+        else '<p style="margin:10px 0 0"><a href="/shows/all">Select all shows</a></p>'
+    )
+    # Marker so the server can tell "user unticked everything" (no `show` fields sent)
+    # apart from "no picker on this page". Browsers omit unchecked boxes entirely.
+    return f"""<input type="hidden" name="show_picker" value="1">
+<details class="shows">
+  <summary>{esc(summary)} &mdash; change</summary>
+  <div class="showlist">{boxes}{reset}</div>
+</details>"""
+
+
+def time_form(user: dict | None, shows: list[dict] | None = None, selected: set | None = None) -> str:
     name = esc((user or {}).get("name"))
     return f"""<p>Connected as <strong>{name}</strong>. <a href="/logout">Log out</a></p>
-<h2>How much time do you have right now?</h2>
-<form method="post" action="/triage" class="row">
-  <button name="minutes" value="15">15 min</button>
-  <button name="minutes" value="30">30 min</button>
-  <button name="minutes" value="60">60 min</button>
-</form>
-<form method="post" action="/triage" class="row" style="margin-top:12px">
-  <input type="number" name="minutes" min="1" max="600" value="45">
-  <button class="secondary">Go</button>
+<form method="post" action="/triage">
+  {show_picker(shows or [], selected)}
+  <h2>How much time do you have right now?</h2>
+  <div class="row">
+    <button name="minutes" value="15">15 min</button>
+    <button name="minutes" value="30">30 min</button>
+    <button name="minutes" value="60">60 min</button>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <input type="number" name="custom_minutes" min="1" max="600" value="45">
+    <button class="secondary" name="minutes" value="custom">Go</button>
+  </div>
 </form>
 <p class="meta" style="margin-top:20px">Scanning your backlog + ranking takes ~10&ndash;20 seconds.</p>"""
 
@@ -135,7 +181,7 @@ Try a longer window rather than starting something you can't finish.</p>
 <p style="margin-top:20px"><a class="btn" href="/app">Pick a different time</a></p>"""
 
 
-def results(sid, minutes, picks, skips, backlog, shows_scanned, dropped=None) -> str:
+def results(sid, minutes, picks, skips, backlog, shows_scanned, dropped=None, shows_followed=None) -> str:
     def pick(p):
         return f"""<div class="card pick">
     <label class="row" style="align-items:flex-start">
@@ -152,7 +198,12 @@ def results(sid, minutes, picks, skips, backlog, shows_scanned, dropped=None) ->
     picks_html = "".join(pick(p) for p in picks) or (
         "<p>No strong pick &mdash; everything in the backlog is low-priority right now.</p>"
     )
-    return f"""<p class="meta">{esc(backlog)} unheard episodes across {esc(shows_scanned)} shows &middot; {esc(minutes)} min budget</p>
+    scope = (
+        f"{esc(shows_scanned)} of your {esc(shows_followed)} shows"
+        if shows_followed and shows_followed != shows_scanned
+        else f"{esc(shows_scanned)} shows"
+    )
+    return f"""<p class="meta">{esc(backlog)} unheard episodes across {scope} &middot; {esc(minutes)} min budget</p>
 {dropped_note(dropped)}
 <form method="post" action="/confirm">
   <input type="hidden" name="sid" value="{esc(sid)}">

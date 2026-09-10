@@ -34,3 +34,44 @@ def read_all(file: str) -> list[dict]:
         return []
     with open(path, "r", encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+# --- per-user preferences -----------------------------------------------------
+# events.jsonl is an append-only audit log; a preference is mutable state, so it
+# lives in its own small file rather than being reconstructed by replaying events.
+# ponytail: whole-file read/modify/write, fine for a handful of users. If this ever
+# has real concurrency, move it to SQLite rather than adding locking here.
+PREFS = "prefs.json"
+
+
+def read_prefs(user_id: str) -> dict:
+    path = DIR / PREFS
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get(user_id, {})
+    except (json.JSONDecodeError, OSError):
+        return {}  # a corrupt prefs file must never break a triage run
+
+
+def write_pref(user_id: str, key: str, value) -> None:
+    path = DIR / PREFS
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            all_prefs = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        all_prefs = {}
+
+    user = all_prefs.setdefault(user_id, {})
+    if value is None:
+        user.pop(key, None)
+    else:
+        user[key] = value
+
+    # Write-then-replace: a crash mid-write leaves the old file intact, not a
+    # truncated one that would read back as "no preferences".
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(all_prefs, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)

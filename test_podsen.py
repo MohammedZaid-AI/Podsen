@@ -703,3 +703,238 @@ def test_accent_colour_is_a_variable_not_a_literal():
     assert "color: var(--accent-coral);" in html
     # the coral must not be hardcoded anywhere outside the token definition
     assert html.count("#E8637A") == 1
+
+
+# --- show selection: scope the run before fetching ------------------------------
+
+ALL_SHOWS = [
+    {"id": "sh_a", "name": "Commute Show", "publisher": "P"},
+    {"id": "sh_b", "name": "Weekend Show", "publisher": "P"},
+    {"id": "sh_c", "name": "Third Show", "publisher": "P"},
+]
+
+
+def _ep(eid, mins=20):
+    return {
+        "id": eid,
+        "uri": "spotify:episode:" + eid,
+        "name": "Ep " + eid,
+        "description": "d",
+        "duration_ms": mins * 60_000,
+        "release_date": "2026-09-01",
+        "resume_point": {"fully_played": False, "resume_position_ms": 0},
+    }
+
+
+@pytest.fixture
+def spotify_stub(monkeypatch):
+    """Stub Spotify and record which show-episode endpoints actually get hit."""
+    requested = []
+    session = {
+        "tokens": {
+            "access_token": "tok",
+            "refresh_token": "r",
+            "expires_at": (time.time() + 600) * 1000,
+        }
+    }
+
+    def fake_call(sess, path, *a, **k):
+        if path.startswith("/me/shows"):
+            return {"items": [{"show": sh} for sh in ALL_SHOWS], "next": None}
+        if path.startswith("/me/player/recently-played"):
+            return {"items": []}
+        raise AssertionError("unexpected call " + path)
+
+    def fake_request(token, path, method="GET", json_body=None):
+        requested.append(path)
+        sid = path.split("/shows/")[1].split("/")[0]
+        return FakeResp(200, {"items": [_ep(sid + "_ep1"), _ep(sid + "_ep2")]})
+
+    monkeypatch.setattr(spotify, "_call", fake_call)
+    monkeypatch.setattr(spotify, "_request", fake_request)
+    return session, requested
+
+
+def test_default_scans_every_followed_show(spotify_stub):
+    """Zero-effort path is unchanged: no selection means scan everything."""
+    session, requested = spotify_stub
+    out = spotify.get_backlog(session)
+    assert out["showsFollowed"] == 3
+    assert out["showsSelected"] == 3
+    assert len(requested) == 3
+    assert {e["show"] for e in out["episodes"]} == {"Commute Show", "Weekend Show", "Third Show"}
+
+
+def test_excluded_shows_are_never_fetched(spotify_stub):
+    """Filtering happens before the fan-out - excluded shows cost no API calls."""
+    session, requested = spotify_stub
+    spotify.get_backlog(session, selected_ids={"sh_a"})
+    assert requested == ["/shows/sh_a/episodes?limit=20&market=US"]
+    assert not any("sh_b" in r or "sh_c" in r for r in requested)
+
+
+def test_excluded_shows_contribute_no_episodes(spotify_stub):
+    session, _ = spotify_stub
+    out = spotify.get_backlog(session, selected_ids={"sh_a", "sh_c"})
+    assert {e["show"] for e in out["episodes"]} == {"Commute Show", "Third Show"}
+    assert out["showsSelected"] == 2 and out["showsFollowed"] == 3
+
+
+def test_stale_selected_id_is_simply_ignored(spotify_stub):
+    """A show the user unfollowed since choosing it must not break the run."""
+    session, _ = spotify_stub
+    out = spotify.get_backlog(session, selected_ids={"sh_a", "gone"})
+    assert out["showsSelected"] == 1
+
+
+def test_nothing_from_an_excluded_show_can_appear_anywhere(monkeypatch, spotify_stub):
+    """End-to-end: an excluded show is absent from picks AND from the skip list."""
+    session, _ = spotify_stub
+    out = spotify.get_backlog(session, selected_ids={"sh_a"})
+
+    monkeypatch.setenv("RANK_BACKEND", "ollama")
+    monkeypatch.setattr(rank_mod, "_preflight", lambda: None)
+    greedy = json.dumps(
+        {
+            "picks": [{"n": i, "reason": "r"} for i in range(1, 3)],
+            "skips": [{"n": i, "reason": "k"} for i in range(1, 3)],
+        }
+    )
+    monkeypatch.setattr(
+        rank_mod.requests,
+        "post",
+        lambda *a, **k: FakeOllama({"done_reason": "stop", "message": {"content": greedy}}),
+    )
+    ranked = rank_mod.rank(out["episodes"], 60)
+    shows = {e["show"] for e in ranked["picks"] + ranked["skips"]}
+    assert shows <= {"Commute Show"}
+    assert "Weekend Show" not in shows and "Third Show" not in shows
+
+
+# --- persistence ----------------------------------------------------------------
+
+def test_prefs_roundtrip_and_isolation(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DIR", tmp_path)
+    store.write_pref("userA", "shows", ["sh_a"])
+    store.write_pref("userB", "shows", ["sh_b", "sh_c"])
+    assert store.read_prefs("userA")["shows"] == ["sh_a"]
+    assert store.read_prefs("userB")["shows"] == ["sh_b", "sh_c"]
+    assert store.read_prefs("nobody") == {}
+
+
+def test_pref_none_clears_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DIR", tmp_path)
+    store.write_pref("u", "shows", ["sh_a"])
+    store.write_pref("u", "shows", None)
+    assert "shows" not in store.read_prefs("u")
+
+
+def test_corrupt_prefs_file_does_not_break_a_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DIR", tmp_path)
+    (tmp_path / store.PREFS).write_text("{not json", encoding="utf-8")
+    assert store.read_prefs("u") == {}
+    store.write_pref("u", "shows", ["sh_a"])  # must recover, not raise
+    assert store.read_prefs("u")["shows"] == ["sh_a"]
+
+
+def _client(monkeypatch, tmp_path):
+    import app as app_mod
+
+    monkeypatch.setattr(store, "DIR", tmp_path)
+    monkeypatch.setattr(app_mod.spotify, "get_followed_shows", lambda s, **k: ALL_SHOWS)
+    monkeypatch.setattr(
+        app_mod.spotify,
+        "get_backlog",
+        lambda s, market="US", selected_ids=None, **k: {
+            "episodes": [
+                {
+                    "id": "e1",
+                    "uri": "u",
+                    "title": "T",
+                    "show": "Commute Show",
+                    "duration_min": 20,
+                    "description": "d",
+                    "released": "2026-09-01",
+                }
+            ],
+            "showsScanned": len(selected_ids) if selected_ids else 3,
+            "showsSelected": len(selected_ids) if selected_ids else 3,
+            "showsFollowed": 3,
+            "dropped": [],
+        },
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "rank",
+        lambda eps, mins: {
+            "picks": [dict(eps[0], reason="r")],
+            "skips": [],
+            "shortest_unfit": None,
+        },
+    )
+    app_mod.app.config["TESTING"] = True
+    c = app_mod.app.test_client()
+    with c.session_transaction() as sess:
+        sess["tokens"] = {"access_token": "t", "refresh_token": "r", "expires_at": 9e99}
+        sess["user"] = {"id": "userX", "name": "X", "country": "US"}
+    return c
+
+
+def test_selection_persists_to_the_next_run(monkeypatch, tmp_path):
+    """Narrow it once; the next visit must come back already narrowed."""
+    c = _client(monkeypatch, tmp_path)
+
+    c.post("/triage", data={"minutes": "30", "show": ["sh_a"]})
+    assert store.read_prefs("userX")["shows"] == ["sh_a"]
+
+    html = c.get("/app").get_data(as_text=True)
+    assert 'value="sh_a" checked' in html
+    assert 'value="sh_b" checked' not in html
+    assert "Scanning 1 of your 3 shows" in html
+
+
+def test_selecting_everything_is_stored_as_no_preference(monkeypatch, tmp_path):
+    """So a show followed later is included automatically, not silently excluded."""
+    c = _client(monkeypatch, tmp_path)
+    c.post("/triage", data={"minutes": "30", "show": ["sh_a", "sh_b", "sh_c"]})
+    assert "shows" not in store.read_prefs("userX")
+    assert "Scanning all 3 shows" in c.get("/app").get_data(as_text=True)
+
+
+def test_select_all_link_resets_a_narrowed_selection(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    c.post("/triage", data={"minutes": "30", "show": ["sh_a"]})
+    assert store.read_prefs("userX")["shows"] == ["sh_a"]
+
+    c.get("/shows/all")
+    assert "shows" not in store.read_prefs("userX")
+    assert "Scanning all 3 shows" in c.get("/app").get_data(as_text=True)
+
+
+def test_unticking_everything_is_refused_not_silently_empty(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # A browser omits unchecked boxes entirely, so "all unticked" sends no `show` at
+    # all - only the picker marker. That must not be read as "no preference".
+    html = c.post("/triage", data={"minutes": "30", "show_picker": "1"}).get_data(as_text=True)
+    assert "Select at least one show" in html
+
+
+def test_custom_minutes_box_still_works_alongside_the_checkboxes(monkeypatch, tmp_path):
+    """Presets and the number input share one form; custom must resolve correctly."""
+    import app as app_mod
+
+    seen = {}
+    c = _client(monkeypatch, tmp_path)
+
+    def spy_rank(eps, mins):
+        seen["mins"] = mins
+        return {"picks": [dict(eps[0], reason="r")], "skips": [], "shortest_unfit": None}
+
+    monkeypatch.setattr(app_mod, "rank", spy_rank)
+    c.post("/triage", data={"minutes": "custom", "custom_minutes": "23", "show": ["sh_a"]})
+    assert seen["mins"] == 23
+
+
+def test_show_picker_escapes_show_names():
+    html = views.show_picker([{"id": "x", "name": "<script>x</script>"}], None)
+    assert "<script>x</script>" not in html and "&lt;script&gt;" in html
