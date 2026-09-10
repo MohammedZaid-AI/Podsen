@@ -177,7 +177,8 @@ def _recently_played_episode_ids(session) -> set:
         return set()
 
 
-def get_backlog(session, max_shows: int = 50, per_show: int = 20, market: str = "US") -> dict:
+def get_followed_shows(session, max_shows: int = 50) -> list[dict]:
+    """The user's saved/followed shows, newest-saved first. One cheap paginated call."""
     shows = []
     url = "/me/shows?limit=50"
     while url and len(shows) < max_shows:
@@ -185,7 +186,23 @@ def get_backlog(session, max_shows: int = 50, per_show: int = 20, market: str = 
         for it in j.get("items", []):
             shows.append(it["show"])
         url = j.get("next")
-    use = shows[:max_shows]
+    return shows[:max_shows]
+
+
+def get_backlog(
+    session,
+    max_shows: int = 50,
+    per_show: int = 20,
+    market: str = "US",
+    selected_ids: set | None = None,
+) -> dict:
+    """Scan the backlog. `selected_ids=None` means every followed show.
+
+    Excluded shows are filtered out *before* the fan-out, so they cost no episode
+    requests and never reach the ranking prompt.
+    """
+    followed = get_followed_shows(session, max_shows)
+    use = [s for s in followed if s["id"] in selected_ids] if selected_ids is not None else followed
 
     played_ids = _recently_played_episode_ids(session)
 
@@ -247,7 +264,8 @@ def get_backlog(session, max_shows: int = 50, per_show: int = 20, market: str = 
     return {
         "episodes": episodes,
         "showsScanned": len(use) - len(dropped),
-        "showsFollowed": len(use),
+        "showsSelected": len(use),
+        "showsFollowed": len(followed),
         "dropped": dropped,
     }
 
