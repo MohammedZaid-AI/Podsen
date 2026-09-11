@@ -85,9 +85,9 @@ def page(title: str, body: str, hero: bool = False) -> str:
 
 def landing() -> str:
     return """<p class="standfirst">Your backlog isn't a debt.</p>
-<p>Podsen weighs every unheard episode across the shows you follow against the time
-you've actually got &mdash; then names the one or two worth playing right now, and what
-you can let go of, guilt-free.</p>
+<p>Podsen looks at all the episodes you haven't listened to yet and figures out 
+what is actually worth your time. Just tell it how much time you have, and it picks 
+the one or two episodes you should listen to right now, while letting you know what you can safely skip.</p>
 <p class="meta">Nothing is skipped or deleted unless you say so.</p>
 <p style="margin-top:24px"><a class="btn" href="/login">Connect Spotify</a></p>"""
 
