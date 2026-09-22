@@ -17,7 +17,8 @@ SCOPES = " ".join(
         "user-read-recently-played",
         "playlist-modify-private",
         "playlist-modify-public",
-        "user-read-private",  # user id + country (market)
+        "user-read-private",
+        "ugc-image-upload",  # Upload Podsen playlist covers  # user id + country (market)
     ]
 )
 
@@ -58,6 +59,7 @@ def auth_url(state: str) -> str:
         "redirect_uri": _redirect(),
         "scope": SCOPES,
         "state": state,
+        "show_dialog": "true",
     }
     return f"{ACCOUNTS}/authorize?{urlencode(params)}"
 
@@ -270,6 +272,53 @@ def get_backlog(
     }
 
 
+
+def _upload_podsen_playlist_cover(session, playlist_id: str) -> None:
+    """Upload the configured Podsen logo as the Spotify playlist cover."""
+    logo_path = os.environ.get("PODSEN_LOGO_PATH", "").strip()
+    if not logo_path:
+        return  # Keep existing playlist creation behavior unless configured.
+
+    try:
+        from io import BytesIO
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError(
+            "Pillow is required to upload the Podsen logo. "
+            "Install it with: pip install Pillow"
+        ) from exc
+
+    if not os.path.isfile(logo_path):
+        raise RuntimeError(
+            f"PODSEN_LOGO_PATH does not exist: {logo_path}"
+        )
+
+    # Spotify's playlist-cover endpoint requires a JPEG image encoded as Base64.
+    with Image.open(logo_path) as image:
+        image = image.convert("RGB")
+        image.thumbnail((640, 640))
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=90, optimize=True)
+        image_data = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    token = _ensure_token(session)
+    print("Spotify token scopes:", session["tokens"].get("scope"))
+    response = requests.put(
+        f"{API}/playlists/{playlist_id}/images",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "image/jpeg",
+        },
+        data=image_data,
+        timeout=TIMEOUT,
+    )
+
+    if not response.ok:
+        raise RuntimeError(
+            "Could not upload Podsen playlist cover: "
+            f"Spotify {response.status_code}: {response.text[:300]}"
+        )
+
 def create_playlist(session, user_id: str, name: str, description: str, uris: list[str]) -> dict:
     """Create a private playlist and verify it is actually private.
 
@@ -287,6 +336,9 @@ def create_playlist(session, user_id: str, name: str, description: str, uris: li
     pid = pl["id"]
     if uris:
         _call(session, f"/playlists/{pid}/tracks", method="POST", json_body={"uris": uris})
+
+    # New feature: if PODSEN_LOGO_PATH is configured, apply Podsen's logo.
+    _upload_podsen_playlist_cover(session, pid)
 
     try:
         _call(session, f"/playlists/{pid}", method="PUT", json_body={"public": False})
