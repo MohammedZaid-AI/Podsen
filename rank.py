@@ -1,18 +1,11 @@
 """The only AI in the app: score fit against the time budget + write the reasons.
 
 Two interchangeable backends behind one `rank()`, selected by RANK_BACKEND:
-  ollama  (default) -- local model, free, no API key
-  claude            -- Anthropic API, better output, ~$0.02/run, needs ANTHROPIC_API_KEY
+  groq    (default) -- Groq API, needs GROQ_API_KEY
+  claude            -- Anthropic API, needs ANTHROPIC_API_KEY
 
 Prompt building, JSON repair and response parsing are shared, so the backends differ
 only in transport.
-
-Why the Ollama backend talks to native /api/chat and not the OpenAI-compatible /v1:
-only the native endpoint honours `options.num_ctx`. Measured on this codebase, /v1
-silently caps a request at 4096 tokens total no matter what you pass, which truncates
-a ~3.8k-token backlog prompt before the model can emit its JSON. Setting num_ctx
-per request removes a whole class of failure without anyone having to remember a
-machine-wide OLLAMA_CONTEXT_LENGTH.
 """
 
 import json
@@ -20,8 +13,16 @@ import os
 
 import requests
 
+# Load .env from this file's directory if python-dotenv is installed.
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
+
 # --- backend selection -------------------------------------------------------
-DEFAULT_BACKEND = "ollama"
+DEFAULT_BACKEND = "groq"
 
 
 def _backend_name() -> str:
@@ -33,9 +34,8 @@ def _backend_name() -> str:
     return name
 
 
-# How much backlog each backend can chew on. See the note by OLLAMA_NUM_CTX: with
-# num_ctx set per request, ollama's ceiling is now RAM, not Ollama's 4096 default.
-LIMITS = {"claude": (50, 600), "ollama": (40, 450)}
+# Maximum candidate episodes and description characters sent to each backend.
+LIMITS = {"claude": (50, 600), "groq": (40, 450)}
 
 # A 62-minute episode is a fine answer to "I have an hour"; a 95-minute one is not.
 BUDGET_TOLERANCE = 1.10
@@ -59,27 +59,13 @@ def _anthropic():
     return _client
 
 
-# --- Ollama ------------------------------------------------------------------
-def _normalize_base(url: str) -> str:
-    """Accept either the native root or a leftover OpenAI-compat /v1 URL."""
-    url = url.rstrip("/")
-    if url.endswith("/v1"):  # old configs pointed here; native is what honours num_ctx
-        url = url[: -len("/v1")]
-    return url
-
-
-OLLAMA_BASE_URL = _normalize_base(os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
-# Measured: a full 40-episode backlog prompt is ~6.8k tokens, and the answer ~0.3k.
-# 8192 left only 14% headroom; 12288 lands at ~57% used with no measured slowdown.
-# Raising it further costs KV-cache RAM, the binding constraint on a laptop.
-OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", 12288))
-OLLAMA_TIMEOUT_S = float(os.environ.get("OLLAMA_TIMEOUT_MS", 300_000)) / 1000
-# Reasoning is off by default: measured 2.8x faster (16s vs 45s) on gemma4:e4b with no
-# quality loss on this task, and it stops reasoning tokens from crowding out the JSON.
-OLLAMA_THINK = (os.environ.get("OLLAMA_THINK") or "").strip().lower() in {"1", "true", "yes"}
-
-_preflight_done = False
+# --- Groq --------------------------------------------------------------------
+GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+GROQ_BASE_URL = (
+    os.environ.get("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
+).rstrip("/")
+GROQ_TIMEOUT_S = float(os.environ.get("GROQ_TIMEOUT_S", "300"))
 
 
 SYSTEM = """You are Podsen, a podcast triage assistant. Tagline: "Listen to what's worth it."
@@ -174,75 +160,116 @@ def _call_claude(user: str) -> str:
     return "".join(b.text for b in res.content if getattr(b, "type", None) == "text")
 
 
-def _preflight() -> None:
-    """Fail with something actionable if Ollama isn't running or the model isn't pulled.
-
-    Cheaper than letting the real failure surface as a connection error mid-triage.
-    """
-    global _preflight_done
-    if _preflight_done:
-        return
-    try:
-        r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=10)
-        r.raise_for_status()
-        tags = r.json()
-    except Exception as e:
-        raise RuntimeError(
-            f"Can't reach Ollama at {OLLAMA_BASE_URL} ({type(e).__name__}). "
-            "Start it (`ollama serve`, or launch the Ollama app) — Podsen's ranking "
-            "runs locally by default."
-        ) from e
-
-    names = {m.get("name", "") for m in tags.get("models", [])}
-    if OLLAMA_MODEL not in names and f"{OLLAMA_MODEL}:latest" not in names:
-        raise RuntimeError(
-            f"Ollama is running but the model {OLLAMA_MODEL!r} isn't pulled. "
-            f"Run: ollama pull {OLLAMA_MODEL}"
-            + (f"  (available: {', '.join(sorted(names))})" if names else "")
-        )
-    _preflight_done = True
 
 
-def _call_ollama(user: str) -> str:
-    _preflight()
+def _call_groq(user: str) -> str:
+    """Call Groq and detect reasoning/token-limit failures clearly."""
+
+    api_key = (
+        os.environ.get("GROQ_API_KEY") or GROQ_API_KEY
+    ).strip()
+
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is missing.")
+
+    model = (
+        os.environ.get("GROQ_MODEL") or GROQ_MODEL
+    ).strip()
+
+    base_url = (
+        os.environ.get("GROQ_BASE_URL") or GROQ_BASE_URL
+    ).rstrip("/")
+
+    timeout_s = float(
+        os.environ.get("GROQ_TIMEOUT_S", str(GROQ_TIMEOUT_S))
+    )
+
     body = {
-        "model": OLLAMA_MODEL,
-        "stream": False,
-        "format": "json",
-        "think": OLLAMA_THINK,
-        # num_ctx per request is the whole reason this uses native /api/chat.
-        "options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.3},
+        "model": model,
+        "temperature": 0.2,
+        "max_completion_tokens": 3000,
+        "reasoning_effort": "low",
         "messages": [
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": user},
+            {
+                "role": "system",
+                "content": (
+                    SYSTEM
+                    + "\n\nReturn ONLY a valid JSON object. "
+                    "Do not include markdown or text outside JSON. "
+                    "Keep the response concise and follow the "
+                    "requested output schema exactly."
+                ),
+            },
+            {
+                "role": "user",
+                "content": user,
+            },
         ],
     }
-    r = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=body, timeout=OLLAMA_TIMEOUT_S)
-    if not r.ok:
-        raise RuntimeError(f"ollama {r.status_code} at {OLLAMA_BASE_URL}: {r.text[:300]}")
 
-    j = r.json()
-    if j.get("error"):
-        raise RuntimeError(f"ollama error: {str(j['error'])[:300]}")
-
-    # Backstop: num_ctx should prevent this, but a much larger backlog could still
-    # overflow, and the failure must name the knob rather than surface as bad JSON.
-    if j.get("done_reason") == "length":
-        used = (j.get("prompt_eval_count") or 0) + (j.get("eval_count") or 0)
+    try:
+        response = requests.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=timeout_s,
+        )
+    except requests.Timeout as exc:
         raise RuntimeError(
-            f"{OLLAMA_MODEL} ran out of context (used ~{used} of {OLLAMA_NUM_CTX} tokens) "
-            "before finishing the JSON. Raise OLLAMA_NUM_CTX (costs RAM), or lower "
-            "LIMITS['ollama'] in rank.py."
+            f"Groq timed out after {timeout_s} seconds."
+        ) from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Could not connect to Groq: {exc}"
+        ) from exc
+
+    if not response.ok:
+        raise RuntimeError(
+            f"Groq HTTP {response.status_code}: "
+            f"{response.text[:1000]}"
         )
 
-    msg = j.get("message") or {}
-    # With think=False `content` carries the answer; with thinking on, an early stop
-    # can leave content empty and the JSON sitting in `thinking`.
-    return (msg.get("content") or "").strip() or (msg.get("thinking") or "").strip()
+    try:
+        data = response.json()
+        choices = data.get("choices") or []
 
+        if not choices:
+            raise RuntimeError("Groq returned no choices.")
 
-_BACKENDS = {"claude": _call_claude, "ollama": _call_ollama}
+        choice = choices[0]
+        message = choice.get("message") or {}
+        content = message.get("content")
+        finish_reason = choice.get("finish_reason")
 
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+        if finish_reason == "length":
+            raise RuntimeError(
+                "Groq stopped at the completion-token limit "
+                "without producing final content. Reduce "
+                "reasoning_effort or increase the token limit."
+            )
+
+        raise RuntimeError(
+            f"Groq returned empty content "
+            f"(finish_reason={finish_reason!r}, "
+            f"model={data.get('model')!r})."
+        )
+
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        raise RuntimeError(
+            "Unexpected response format from Groq: "
+            f"{response.text[:1000]}"
+        ) from exc
+
+_BACKENDS = {
+    "claude": _call_claude,
+    "groq": _call_groq,
+}
 
 def parse(text: str, candidates: list[dict]) -> dict:
     out = extract_json(text)
@@ -291,7 +318,7 @@ def rank(episodes: list[dict], minutes: int) -> dict:
     try:
         return _checked(text)
     except ValueError as first_err:
-        # Local models fairly regularly break their own JSON (an unescaped quote inside
+        # Models can occasionally break their own JSON (an unescaped quote inside
         # a reason is the one seen in practice). One corrective retry is far cheaper
         # than failing a whole triage the user waited a minute for.
         retry_user = user + REPAIR_HINT.format(err=str(first_err)[:120])
@@ -301,5 +328,5 @@ def rank(episodes: list[dict], minutes: int) -> dict:
             raise RuntimeError(
                 f"{backend} returned unparseable JSON twice "
                 f"(first: {str(first_err)[:100]}; retry: {str(second_err)[:100]}). "
-                "Try again, or switch model via OLLAMA_MODEL."
+                "Try again, or check GROQ_MODEL / the selected backend."
             ) from second_err
