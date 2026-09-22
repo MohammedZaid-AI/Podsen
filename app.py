@@ -37,13 +37,15 @@ def index():
         return redirect("/app")
     return views.page("Podsen", views.landing(), hero=True)
 
-
 @app.get("/login")
 def login():
     state = secrets.token_hex(16)
     session["state"] = state
-    return redirect(spotify.auth_url(state))
 
+    url = spotify.auth_url(state)
+    print("Spotify auth URL:", url)
+
+    return redirect(url)
 
 @app.get("/callback")
 def callback():
