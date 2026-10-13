@@ -337,8 +337,12 @@ def create_playlist(session, user_id: str, name: str, description: str, uris: li
     if uris:
         _call(session, f"/playlists/{pid}/tracks", method="POST", json_body={"uris": uris})
 
-    # New feature: if PODSEN_LOGO_PATH is configured, apply Podsen's logo.
-    _upload_podsen_playlist_cover(session, pid)
+    # Best effort: a missing logo, Pillow or scope must never cost the user their
+    # playlist, nor skip the privacy enforcement below.
+    try:
+        _upload_podsen_playlist_cover(session, pid)
+    except Exception as e:
+        print(f"Podsen cover upload skipped: {type(e).__name__}: {e}")
 
     try:
         _call(session, f"/playlists/{pid}", method="PUT", json_body={"public": False})
