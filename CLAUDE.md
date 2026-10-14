@@ -14,7 +14,8 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000       # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_podsen.py -q    # 59 tests
+python -m pytest test_podsen.py test_v2.py -q   # 152 tests (71 V1 + 81 V2)
+python -m v2.report --dir v2/sample_data       # V2 eval report on FAKE samples
 ```
 
 There is **no auto-reload** — after editing, kill the process on port 3000 and
@@ -27,7 +28,7 @@ server without restarting has produced false "the fix didn't work" conclusions.
 |---|---|
 | `app.py` | Flask routes, the 6-step flow, `/admin` dump |
 | `spotify.py` | OAuth, token refresh, backlog fetch, playlist create |
-| `rank.py` | the only LLM call; ollama + claude behind one `rank()` |
+| `rank.py` | the only LLM call; groq (default) + claude behind one `rank()` |
 | `store.py` | append-only `events.jsonl` |
 | `views.py` | HTML string builders |
 
@@ -40,11 +41,14 @@ feedback. Nothing is hidden, skipped or deleted without an explicit confirm.
 
 ## Gotchas that cost real time — do not rediscover these
 
+*The next two are historical: the Ollama backend was removed in `918b147` (switched
+to Groq). Keep them in case a local backend comes back.*
+
 **Ollama `/v1` silently ignores `options.num_ctx`.** It caps every request at exactly
 4096 tokens total regardless of what you pass, which truncates the ~6.8k backlog
 prompt mid-answer and surfaces as an unrelated-looking JSON parse error. Only the
-native `/api/chat` endpoint honours it. That is why `rank.py` does not use the
-OpenAI-compatible endpoint despite it being more portable.
+native `/api/chat` endpoint honours it. That is why the Ollama backend used it rather
+than the OpenAI-compatible endpoint despite it being more portable.
 
 **`think: false` is 2.8× faster** on gemma4:e4b (16s vs 45s) with no quality loss on
 this task, and stops reasoning tokens crowding out the JSON.
@@ -83,19 +87,58 @@ kills the worker mid-run.
 
 ## Hosting reality
 
-Ranking runs on **local Ollama by default**, so the app only works while this machine
-is on. `Dockerfile` / `fly.toml` / `render.yaml` are kept but **do not work as written**
-— a container can't reach `localhost:11434`. Recommended: run locally, share via
+Ranking now calls the **hosted Groq API by default** (needs `GROQ_API_KEY`). The old
+blocker for `Dockerfile` / `fly.toml` / `render.yaml` (a container can't reach a local
+Ollama at `localhost:11434`) no longer applies, but none of them has been re-tested
+since the switch — treat them as unverified. Recommended: run locally, share via
 `cloudflared tunnel`. See README for the alternatives.
 
 ## Current state / known weak spots
 
-- `RANK_BACKEND` defaults to `ollama` (`gemma4:e4b`). `claude` works but **has never
-  been executed against the live API** — no key has ever been available in this project.
-  It is verified only against stubs and the SDK signature.
-- `gemma4:26b` needs ~20GB; will not load on a 12GB / 6GB-VRAM laptop.
-- The local model occasionally emits malformed JSON (unescaped quote in a reason);
-  `rank()` retries once with a corrective hint, then fails with a clear message.
+- `RANK_BACKEND` defaults to `groq` (`GROQ_MODEL`, default `llama-3.3-70b-versatile`).
+  `claude` works but **has never been executed against the live API** — no key has ever
+  been available in this project. It is verified only against stubs and the SDK signature.
+- Models occasionally emit malformed JSON (unescaped quote in a reason); `rank()`
+  retries once with a corrective hint, then fails with a clear message.
 - `legacy-js/` is the superseded Node implementation, kept only because the repo began
   without git history. Safe to delete.
 - Feedback in `events.jsonl` so far is the builder's own — not yet a validation signal.
+
+## V2 Phase 0 — evaluation setup (`v2/`)
+
+V2 is set selection under a time budget: which SET of backlog episodes fits the time
+I have and is worth it. It lives next to V1; nothing in V1 depends on it.
+
+**Data rule: V2 uses public RSS + hand labels only.** Spotify's developer policy bars
+feeding Spotify data into AI/ML. Nothing under `v2/` may import `spotify.py`, `app.py`
+or read Spotify fields; label files reject non-RSS episode fields. `test_v2.py` enforces
+this with an AST scan — don't weaken it to make something pass.
+
+| File | Role |
+|---|---|
+| `v2/rss.py` | RSS → episodes (stdlib). Durations round UP: V2's budget is a hard cap |
+| `v2/dataset.py` | label file format, validation, save under `DATA_DIR/labels/` |
+| `v2/baselines.py` | `newest_first`, `random_fill`, `v1_llm`; `select(backlog, budget, intent)` |
+| `v2/metrics.py` | pick_hit_rate, regret_rate, budget_used, duplicate_catch_rate, bootstrap |
+| `v2/report.py` | `python -m v2.report [--dir DIR]` — table + CIs over backlogs |
+| `v2/label_views.py` | HTML for `/label` (routes are in `app.py`, no Spotify login) |
+| `v2/sample_data/` | 3 **FAKE** backlogs so the report runs without real labels |
+
+```bash
+flask --app app run --port 3000   # then open http://127.0.0.1:3000/label
+python -m v2.report               # every file in data/labels/
+python -m v2.report --dir v2/sample_data
+```
+
+- Budget is a hard cap for every method (V1's 10% tolerance does not apply); the
+  `v1_llm` wrapper drops over-budget picks and the report counts them.
+- With no API key, `v1_llm` shows `SKIPPED, no API key`; a call error shows `FAILED`.
+- Under 5 backlogs, the report never calls a difference, whatever the intervals say.
+- `/label` is locked to this machine (127.0.0.1 / ::1 with no proxy headers) or
+  `?key=ADMIN_KEY`. cloudflared connects from 127.0.0.1, so loopback alone is NOT
+  enough — the forwarding-header check is what keeps tunnel visitors out. Feed
+  fetches are limited to public http(s) addresses, 30 MB, 20 s.
+- `groups_touched` sits beside `duplicate_catch_rate`: picking nothing from a group
+  counts as "caught", so read the two together.
+- Later phases: a new method must beat the best earlier one by a meaningful margin
+  or it is cut; simpler wins ties. If V2 can't clearly beat `newest_first`, say so.

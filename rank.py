@@ -48,12 +48,12 @@ _client = None
 def _anthropic():
     global _client
     if _client is None:
-        from anthropic import Anthropic  # imported lazily: no key needed on the ollama path
+        from anthropic import Anthropic  # imported lazily: not needed on the groq path
 
         if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
             raise RuntimeError(
                 "RANK_BACKEND=claude needs ANTHROPIC_API_KEY. Unset RANK_BACKEND to use "
-                "the local ollama backend instead, which needs no key."
+                "the default Groq backend instead, which needs GROQ_API_KEY."
             )
         _client = Anthropic()
     return _client

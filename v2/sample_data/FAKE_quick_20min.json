@@ -1,0 +1,132 @@
+{
+  "name": "FAKE sample - coffee break",
+  "budget_minutes": 20,
+  "intent": "Short and light. Something to finish before the kettle's cold.",
+  "fake": true,
+  "note": "FAKE sample data, invented by hand so `python -m v2.report --dir v2/sample_data` runs without real labels. Shows, episodes and labels are fictional. Numbers from this file say nothing about real pick quality.",
+  "episodes": [
+    {
+      "id": "fake-quick_20min-01",
+      "title": "FAKE: Today in five",
+      "show": "FAKE Daily Pocket",
+      "description": "Five headlines in five minutes.",
+      "duration_min": 6,
+      "released": "2026-10-13",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-quick_20min-02",
+      "title": "FAKE: Where 'deadline' came from",
+      "show": "FAKE Word Nerd",
+      "description": "A grim origin story for an office word.",
+      "duration_min": 11,
+      "released": "2026-10-12",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-quick_20min-03",
+      "title": "FAKE: Why bread goes stale",
+      "show": "FAKE Kitchen Science",
+      "description": "Starch retrogradation, explained with toast.",
+      "duration_min": 15,
+      "released": "2026-10-12",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-quick_20min-04",
+      "title": "FAKE: Today in five",
+      "show": "FAKE Daily Pocket",
+      "description": "Five headlines in five minutes.",
+      "duration_min": 6,
+      "released": "2026-10-12",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-quick_20min-05",
+      "title": "FAKE: Oil slips on supply news",
+      "show": "FAKE Market Snap",
+      "description": "A quick market update.",
+      "duration_min": 7,
+      "released": "2026-10-11",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-quick_20min-06",
+      "title": "FAKE: The comma that cost a fortune",
+      "show": "FAKE Word Nerd",
+      "description": "A contract dispute decided by punctuation.",
+      "duration_min": 13,
+      "released": "2026-10-09",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-quick_20min-07",
+      "title": "FAKE: The first vending machine",
+      "show": "FAKE Tiny Histories",
+      "description": "Holy water, a coin and a lever, two thousand years ago.",
+      "duration_min": 18,
+      "released": "2026-10-08",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-quick_20min-08",
+      "title": "FAKE: Best of: the egg episode",
+      "show": "FAKE Kitchen Science",
+      "description": "A re-run of the show's most popular episode.",
+      "duration_min": 14,
+      "released": "2026-10-05",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-quick_20min-09",
+      "title": "FAKE: Why pencils are yellow",
+      "show": "FAKE Tiny Histories",
+      "description": "A marketing decision from the 1890s that stuck.",
+      "duration_min": 16,
+      "released": "2026-10-01",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-quick_20min-10",
+      "title": "FAKE: Weekly wrap",
+      "show": "FAKE Market Snap",
+      "description": "The week in markets.",
+      "duration_min": 9,
+      "released": "2026-09-27",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-quick_20min-11",
+      "title": "FAKE: Words that flipped meaning",
+      "show": "FAKE Word Nerd",
+      "description": "From 'nice' to 'awful': semantic drift in action.",
+      "duration_min": 12,
+      "released": "2026-09-22",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-quick_20min-12",
+      "title": "FAKE: Today in five",
+      "show": "FAKE Daily Pocket",
+      "description": "Five headlines in five minutes.",
+      "duration_min": 6,
+      "released": "2026-09-20",
+      "has_transcript": false
+    }
+  ],
+  "labels": {
+    "fake-quick_20min-01": "not_wanted",
+    "fake-quick_20min-02": "wanted",
+    "fake-quick_20min-03": "wanted",
+    "fake-quick_20min-04": "not_wanted",
+    "fake-quick_20min-05": "not_wanted",
+    "fake-quick_20min-06": "would_regret_skipping",
+    "fake-quick_20min-07": "wanted",
+    "fake-quick_20min-08": "not_wanted",
+    "fake-quick_20min-09": "would_regret_skipping",
+    "fake-quick_20min-10": "not_wanted",
+    "fake-quick_20min-11": "wanted",
+    "fake-quick_20min-12": "not_wanted"
+  },
+  "duplicate_groups": []
+}

@@ -1,0 +1,157 @@
+{
+  "name": "FAKE sample - weekday commute",
+  "budget_minutes": 45,
+  "intent": "Something I can follow while driving. News is fine if it's not stuff I already heard.",
+  "fake": true,
+  "note": "FAKE sample data, invented by hand so `python -m v2.report --dir v2/sample_data` runs without real labels. Shows, episodes and labels are fictional. Numbers from this file say nothing about real pick quality.",
+  "episodes": [
+    {
+      "id": "fake-commute_45min-01",
+      "title": "FAKE: Port strike enters day three",
+      "show": "FAKE Morning Wire Daily",
+      "description": "Union and shippers trade offers as container ships queue offshore.",
+      "duration_min": 18,
+      "released": "2026-10-12",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-commute_45min-02",
+      "title": "FAKE: The port strike, explained",
+      "show": "FAKE The Briefing Room",
+      "description": "What the dockworkers want, who is losing money, and how long it could last.",
+      "duration_min": 22,
+      "released": "2026-10-12",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-commute_45min-03",
+      "title": "FAKE: The last lighthouse keeper",
+      "show": "FAKE Long Form Hour",
+      "description": "An oral history of the final staffed lighthouse on the north coast.",
+      "duration_min": 58,
+      "released": "2026-10-11",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-commute_45min-04",
+      "title": "FAKE: Rate cut odds after jobs data",
+      "show": "FAKE Money Minute",
+      "description": "Traders reprice after a soft payrolls print.",
+      "duration_min": 9,
+      "released": "2026-10-11",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-commute_45min-05",
+      "title": "FAKE: Why octopuses dream",
+      "show": "FAKE Science Shorts",
+      "description": "New sleep studies suggest cephalopods cycle through two distinct sleep states.",
+      "duration_min": 14,
+      "released": "2026-10-10",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-commute_45min-06",
+      "title": "FAKE: Building a bakery chain from one oven",
+      "show": "FAKE Founders Unfiltered",
+      "description": "A founder on pricing, rent, and the week they nearly closed.",
+      "duration_min": 41,
+      "released": "2026-10-09",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-commute_45min-07",
+      "title": "FAKE: Weekend headlines recap",
+      "show": "FAKE Morning Wire Daily",
+      "description": "A roundup of the weekend's top stories.",
+      "duration_min": 16,
+      "released": "2026-10-08",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-commute_45min-08",
+      "title": "FAKE: Typefaces on road signs",
+      "show": "FAKE Design Matters Weekly",
+      "description": "Why highway signage fonts are chosen for legibility at speed.",
+      "duration_min": 27,
+      "released": "2026-10-07",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-commute_45min-09",
+      "title": "FAKE: Best of: what is a bond, really",
+      "show": "FAKE Money Minute",
+      "description": "A re-run of the show's most played explainer.",
+      "duration_min": 8,
+      "released": "2026-10-06",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-commute_45min-10",
+      "title": "FAKE: The physics of a perfect skipping stone",
+      "show": "FAKE Science Shorts",
+      "description": "Spin, angle and speed: what makes a stone bounce twenty times.",
+      "duration_min": 12,
+      "released": "2026-10-04",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-commute_45min-11",
+      "title": "FAKE: Inside a seed vault",
+      "show": "FAKE Long Form Hour",
+      "description": "A visit to the vault storing a million crop varieties.",
+      "duration_min": 52,
+      "released": "2026-10-02",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-commute_45min-12",
+      "title": "FAKE: Election map, county by county",
+      "show": "FAKE The Briefing Room",
+      "description": "A deep dive into turnout shifts in last month's regional vote.",
+      "duration_min": 35,
+      "released": "2026-09-29",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-commute_45min-13",
+      "title": "FAKE: Best of: hiring your first ten",
+      "show": "FAKE Founders Unfiltered",
+      "description": "Highlights from past episodes on early hiring.",
+      "duration_min": 38,
+      "released": "2026-09-25",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-commute_45min-14",
+      "title": "FAKE: The quiet redesign of the paper clip",
+      "show": "FAKE Design Matters Weekly",
+      "description": "How a tiny change in wire gauge cut breakage by half.",
+      "duration_min": 19,
+      "released": "2026-09-20",
+      "has_transcript": false
+    }
+  ],
+  "labels": {
+    "fake-commute_45min-01": "not_wanted",
+    "fake-commute_45min-02": "wanted",
+    "fake-commute_45min-03": "would_regret_skipping",
+    "fake-commute_45min-04": "not_wanted",
+    "fake-commute_45min-05": "would_regret_skipping",
+    "fake-commute_45min-06": "wanted",
+    "fake-commute_45min-07": "not_wanted",
+    "fake-commute_45min-08": "wanted",
+    "fake-commute_45min-09": "not_wanted",
+    "fake-commute_45min-10": "wanted",
+    "fake-commute_45min-11": "wanted",
+    "fake-commute_45min-12": "not_wanted",
+    "fake-commute_45min-13": "not_wanted",
+    "fake-commute_45min-14": "would_regret_skipping"
+  },
+  "duplicate_groups": [
+    [
+      "fake-commute_45min-01",
+      "fake-commute_45min-02"
+    ]
+  ]
+}

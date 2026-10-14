@@ -13,11 +13,10 @@ no transcription.
 
 ## ⚠️ This runs on your machine
 
-Ranking uses a **local Ollama model by default**. No API key, nothing to pay for —
-but it only works while your machine is on, awake, and running Ollama. A hosted
-container cannot reach `localhost:11434` on your laptop, so **the Dockerfile /
-fly.toml / render.yaml path does not work as-is** (those files are kept, with notes,
-for when you want it).
+Ranking calls the **hosted Groq API by default** (`GROQ_API_KEY` required). The app
+itself still runs on your machine, so it only works while your machine is on. The
+Dockerfile / fly.toml / render.yaml files are kept, but they predate the switch to
+Groq and **have not been re-tested since** — treat them as unverified.
 
 **Recommended setup for testers: run locally, share via a tunnel.**
 
@@ -40,9 +39,8 @@ acceptable:
 | Option | Testers get | Cost |
 |---|---|---|
 | **Local + cloudflared tunnel** (recommended) | Works while your machine is on | Free, 2 min |
-| Deploy the app, tunnel back to your Ollama | Same laptop dependency, and your Ollama is exposed — put auth in front | Free, ~15 min |
-| Host Ollama on a GPU box, point `OLLAMA_BASE_URL` at it | Always-on, no laptop dependency | ~$0.50–2/hr |
-| `RANK_BACKEND=claude` + `ANTHROPIC_API_KEY` | Always-on, no Ollama at all | ~$0.02/run |
+| Deploy the container (Fly / Render) | Always-on — once the deploy files are re-verified | host's pricing |
+| `RANK_BACKEND=claude` + `ANTHROPIC_API_KEY` | Same as above, Claude instead of Groq | ~$0.02/run |
 
 ## Stack
 
@@ -65,54 +63,27 @@ carried — and because form-driven server-rendered pages are exactly what it's 
 
 ## Ranking backends
 
-`RANK_BACKEND` picks one. **Default is `ollama`** — leave it unset and everything
-works with no API key.
+`RANK_BACKEND` picks one. **Default is `groq`** — leave it unset and set `GROQ_API_KEY`.
 
-| | `ollama` (default) | `claude` |
+| | `groq` (default) | `claude` |
 |---|---|---|
-| Cost | free | ~$0.02/run |
-| Speed | ~18s | ~10–20s |
-| Needs | Ollama + `gemma4:e4b` | `ANTHROPIC_API_KEY` |
+| Needs | `GROQ_API_KEY` | `ANTHROPIC_API_KEY` |
+| Model | `GROQ_MODEL`, default `llama-3.3-70b-versatile` | `ANTHROPIC_MODEL` |
 | Backlog ranked | 40 episodes | 50 episodes |
-| Quality | good enough to test the idea; see below | better |
 
 Both share prompt building, JSON repair and parsing — only the transport differs.
+Models occasionally emit malformed JSON (an unescaped quote inside a reason);
+`rank()` retries once with a corrective instruction before failing. The `claude`
+backend has only been verified against stubs, never the live API.
 
-### Why the Ollama backend uses `/api/chat`, not `/v1`
-
-Only Ollama's **native** endpoint honours `options.num_ctx`. Measured here: the
-OpenAI-compatible `/v1` endpoint silently caps a request at 4096 tokens total no
-matter what you pass, which truncated the ~6.8k-token backlog prompt and left the
-model cut off before it could emit JSON — surfacing as an unrelated-looking parse
-error. Setting `num_ctx` per request removes that whole class of failure, so
-**you do not need to set `OLLAMA_CONTEXT_LENGTH` on the server any more**. If your
-`OLLAMA_BASE_URL` still ends in `/v1` it's stripped automatically.
-
-### Known corners of the local model
-
-- Reasons are usually specific, but `gemma4:e4b` still occasionally falls back to
-  "the 79-minute runtime is too long" despite being told not to — roughly 1 skip in 4,
-  down from 4 in 4 before prompt tuning.
-- It sometimes truncates a single reason mid-sentence. Cosmetic, doesn't break parsing.
-- It occasionally emits malformed JSON (an unescaped quote inside a reason).
-  `rank()` retries once with a corrective instruction before failing.
-- `gemma4:26b` is a much better model but needs ~20 GB — it will not load on a 12 GB /
-  6 GB-VRAM laptop. Set `OLLAMA_MODEL=gemma4:26b` on better hardware.
-- Reasoning mode is **off** (`think: false`): measured 2.8× faster (16s vs 45s) with
-  no quality loss on this task. `OLLAMA_THINK=true` re-enables it.
+The project used a local Ollama backend until commit `918b147`; its notes are in git
+history if a local backend is ever wanted again.
 
 ## Setup
 
-### 1. Ollama (~5 min)
+### 1. Groq key (~2 min)
 
-```
-# install from https://ollama.com/download  (or: winget install Ollama.Ollama)
-ollama pull gemma4:e4b        # ~9.6 GB
-```
-
-That's it — no context-length env var, no config. Podsen checks on its first ranking
-call that Ollama is reachable and the model is pulled, and tells you exactly what to
-run if not.
+Create a key at https://console.groq.com/keys and put it in `.env` as `GROQ_API_KEY`.
 
 ### 2. Spotify app (~3 min)
 
@@ -129,7 +100,7 @@ run if not.
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1        # source .venv/bin/activate elsewhere
 pip install -r requirements.txt
-copy .env.example .env              # fill in the two Spotify values
+copy .env.example .env              # fill in the Spotify values and GROQ_API_KEY
 flask --app app run --port 3000     # `flask run` is what reads .env
 ```
 
@@ -144,13 +115,13 @@ confirmed, feedback answers). Or `cat data/events.jsonl`.
 
 ```
 pip install pytest
-python -m pytest test_podsen.py -q
+python -m pytest test_podsen.py test_v2.py -q
 ```
 
-Covers unheard detection, model-output parsing and the JSON-repair retry, the
-pick/skip overlap guard, backend selection and the no-API-key default path, the
-`num_ctx` safeguard and preflight errors, fan-out failure reporting, the JSONL event
-format, and HTML escaping. Transport stubs are test doubles — the app itself still
+`test_podsen.py` (V1) covers unheard detection, model-output parsing and the
+JSON-repair retry, the pick/skip overlap guard, backend selection, Groq request and
+error handling, fan-out failure reporting, the JSONL event format, and HTML escaping.
+`test_v2.py` covers the V2 evaluation setup (see CLAUDE.md). Transport stubs are test doubles — the app itself still
 shows nothing that didn't come from real Spotify data.
 
 ## Known corners (fine for a prototype)

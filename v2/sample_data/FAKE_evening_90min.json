@@ -1,0 +1,177 @@
+{
+  "name": "FAKE sample - evening walk",
+  "budget_minutes": 90,
+  "intent": "Wind-down listening. Ideas over news. Happy to go long if it's worth it.",
+  "fake": true,
+  "note": "FAKE sample data, invented by hand so `python -m v2.report --dir v2/sample_data` runs without real labels. Shows, episodes and labels are fictional. Numbers from this file say nothing about real pick quality.",
+  "episodes": [
+    {
+      "id": "fake-evening_90min-01",
+      "title": "FAKE: Can cities be quiet?",
+      "show": "FAKE Ideas Lab",
+      "description": "Urban acousticians on noise maps and the push for quiet zones.",
+      "duration_min": 48,
+      "released": "2026-10-13",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-evening_90min-02",
+      "title": "FAKE: Is boredom useful?",
+      "show": "FAKE Big Questions",
+      "description": "A psychologist argues boredom is a signal, not a defect.",
+      "duration_min": 55,
+      "released": "2026-10-12",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-evening_90min-03",
+      "title": "FAKE: Chip export rules, round six",
+      "show": "FAKE Tech This Week",
+      "description": "The latest change to semiconductor export controls.",
+      "duration_min": 32,
+      "released": "2026-10-12",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-04",
+      "title": "FAKE: What the new chip rules mean for you",
+      "show": "FAKE Tech This Week",
+      "description": "Same rule change, consumer angle.",
+      "duration_min": 28,
+      "released": "2026-10-11",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-05",
+      "title": "FAKE: The great molasses flood",
+      "show": "FAKE History Footnotes",
+      "description": "How a burst tank turned a city street into a syrup wave.",
+      "duration_min": 41,
+      "released": "2026-10-10",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-06",
+      "title": "FAKE: Best of: the economics of attention",
+      "show": "FAKE Ideas Lab",
+      "description": "A re-run from two seasons ago.",
+      "duration_min": 50,
+      "released": "2026-10-09",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-evening_90min-07",
+      "title": "FAKE: Festival season wrap",
+      "show": "FAKE Culture Desk",
+      "description": "Picks and pans from the late-summer festivals.",
+      "duration_min": 37,
+      "released": "2026-10-08",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-08",
+      "title": "FAKE: Do animals grieve?",
+      "show": "FAKE Big Questions",
+      "description": "Field researchers describe mourning-like behaviour in elephants and crows.",
+      "duration_min": 62,
+      "released": "2026-10-06",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-evening_90min-09",
+      "title": "FAKE: Mapmakers who invented islands",
+      "show": "FAKE History Footnotes",
+      "description": "Phantom islands that stayed on charts for centuries.",
+      "duration_min": 39,
+      "released": "2026-10-04",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-10",
+      "title": "FAKE: Why sequels got long",
+      "show": "FAKE Culture Desk",
+      "description": "Runtime creep in blockbuster films.",
+      "duration_min": 24,
+      "released": "2026-10-01",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-11",
+      "title": "FAKE: Lichens are two organisms (or three)",
+      "show": "FAKE Slow Science",
+      "description": "The surprising partnership behind the crust on every old wall.",
+      "duration_min": 33,
+      "released": "2026-09-28",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-evening_90min-12",
+      "title": "FAKE: A year of measuring one tree",
+      "show": "FAKE Slow Science",
+      "description": "One researcher, one oak, twelve months of data.",
+      "duration_min": 46,
+      "released": "2026-09-21",
+      "has_transcript": true
+    },
+    {
+      "id": "fake-evening_90min-13",
+      "title": "FAKE: The case for shorter meetings",
+      "show": "FAKE Ideas Lab",
+      "description": "A management consultant pitches a 20-minute default.",
+      "duration_min": 29,
+      "released": "2026-09-18",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-14",
+      "title": "FAKE: What makes a joke land?",
+      "show": "FAKE Big Questions",
+      "description": "Comedians and linguists on timing and surprise.",
+      "duration_min": 44,
+      "released": "2026-09-12",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-15",
+      "title": "FAKE: Lost recipes of the clipper ships",
+      "show": "FAKE History Footnotes",
+      "description": "Ship's logs reveal what long-haul crews actually ate.",
+      "duration_min": 36,
+      "released": "2026-09-05",
+      "has_transcript": false
+    },
+    {
+      "id": "fake-evening_90min-16",
+      "title": "FAKE: Rewilding a parking lot",
+      "show": "FAKE Slow Science",
+      "description": "Ten years after the asphalt came up.",
+      "duration_min": 38,
+      "released": "2026-08-30",
+      "has_transcript": true
+    }
+  ],
+  "labels": {
+    "fake-evening_90min-01": "wanted",
+    "fake-evening_90min-02": "would_regret_skipping",
+    "fake-evening_90min-03": "not_wanted",
+    "fake-evening_90min-04": "not_wanted",
+    "fake-evening_90min-05": "wanted",
+    "fake-evening_90min-06": "not_wanted",
+    "fake-evening_90min-07": "not_wanted",
+    "fake-evening_90min-08": "wanted",
+    "fake-evening_90min-09": "would_regret_skipping",
+    "fake-evening_90min-10": "not_wanted",
+    "fake-evening_90min-11": "wanted",
+    "fake-evening_90min-12": "wanted",
+    "fake-evening_90min-13": "not_wanted",
+    "fake-evening_90min-14": "wanted",
+    "fake-evening_90min-15": "not_wanted",
+    "fake-evening_90min-16": "would_regret_skipping"
+  },
+  "duplicate_groups": [
+    [
+      "fake-evening_90min-03",
+      "fake-evening_90min-04"
+    ]
+  ]
+}
