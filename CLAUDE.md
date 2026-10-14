@@ -14,7 +14,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000       # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_podsen.py test_v2.py -q   # 152 tests (71 V1 + 81 V2)
+python -m pytest test_podsen.py test_v2.py test_v2_app.py -q   # 201 tests (71 V1 + 81 V2 eval + 49 V2 app)
 python -m v2.report --dir v2/sample_data       # V2 eval report on FAKE samples
 ```
 
@@ -103,6 +103,29 @@ since the switch — treat them as unverified. Recommended: run locally, share v
 - `legacy-js/` is the superseded Node implementation, kept only because the repo began
   without git history. Safe to delete.
 - Feedback in `events.jsonl` so far is the builder's own — not yet a validation signal.
+
+## V2 app — the new product flow (`/v2`)
+
+Own accounts (email + werkzeug-hashed password, SQLite at `DATA_DIR/podsen_v2.db`),
+shows found via the Apple iTunes Search API, picks from public RSS. No Spotify login,
+no Spotify data. Routes: Blueprint in `v2/web.py`; HTML in `v2/app_views.py`.
+
+- **`v2/engine.py` `pick()` is the only place the method is chosen.** Currently
+  `newest_first`; swap it there once a later layer beats it on labeled backlogs.
+- Backlog = last `RECENT_DAYS` (30) of saved feeds, minus episodes marked heard.
+  Feeds cached 1 hour in SQLite. Undated episodes are left out.
+- Session: only `session["v2_user"]`, `session["v2_csrf"]` and `session.permanent` —
+  the cookie is shared with V1, so V2 code must never read other keys. `test_v2.py`
+  enforces this. V2 logins are permanent (30 days, `PERMANENT_SESSION_LIFETIME`); V1
+  never sets permanent. V1's `/logout` clears the whole session, so it logs out of V2 too.
+- Every V2 POST needs `csrf_token` (checked in `web.py`'s `before_request`, 400 if
+  missing or wrong). New POST forms must include `_csrf(csrf)`.
+- "Add show" takes only the iTunes id and re-looks up the feed URL from Apple, so a
+  form can't make the server fetch an arbitrary URL.
+- Login throttle (15 min): 5 failures per email *from one IP*, 20 per IP across all
+  emails. Per-IP keying is what stops one person locking out someone else.
+- `/v2/account` → "Delete my account" (password + same throttle) removes the user and
+  all their rows: shows, heard, runs, feedback, login failures.
 
 ## V2 Phase 0 — evaluation setup (`v2/`)
 

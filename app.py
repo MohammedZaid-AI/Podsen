@@ -18,6 +18,7 @@ from store import append, read_all, read_prefs, write_pref
 from v2 import dataset as v2_dataset
 from v2 import label_views
 from v2 import rss as v2_rss
+from v2.web import bp as v2_bp
 
 app = Flask(__name__)
 # Behind Fly/Render TLS termination, trust one proxy hop so redirect_uri stays https.
@@ -29,8 +30,12 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",  # still sent on the top-level GET back from Spotify
     SESSION_COOKIE_SECURE=os.environ.get("FLASK_ENV") == "production"
     or os.environ.get("NODE_ENV") == "production",
-    PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+    # Only V2 marks its session permanent (V2 users stay logged in 30 days); V1 never
+    # does, so its cookie still ends with the browser session as before.
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
 )
+# V2 product flow under /v2: own accounts + public RSS, independent of the V1 routes.
+app.register_blueprint(v2_bp)
 
 
 def authed() -> bool:

@@ -23,7 +23,9 @@ TIMEOUT_S = 20
 MAX_BYTES = 30 * 1024 * 1024  # long-running shows publish multi-MB feeds
 USER_AGENT = "Podsen/2 (+podcast triage research; RSS reader)"
 
-EPISODE_FIELDS = ("id", "title", "show", "description", "duration_min", "released", "has_transcript")
+EPISODE_FIELDS = (
+    "id", "title", "show", "description", "duration_min", "released", "has_transcript", "audio_url",
+)
 
 
 def parse_duration(raw) -> int | None:
@@ -79,6 +81,13 @@ def _released(pub_date: str | None) -> str | None:
         return None
 
 
+def _audio_url(item) -> str | None:
+    """The enclosure URL, if it is plain http(s). It is rendered into an <audio src>."""
+    enc = item.find("enclosure")
+    url = (enc.get("url") or "").strip() if enc is not None else ""
+    return url if urlparse(url).scheme in ("http", "https") else None
+
+
 def _text(item, tag: str) -> str | None:
     el = item.find(tag)
     return el.text if el is not None else None
@@ -125,6 +134,7 @@ def parse_feed(xml_bytes: bytes | str, per_feed: int | None = None) -> dict:
                 "duration_min": minutes,
                 "released": _released(_text(item, "pubDate")),
                 "has_transcript": item.find(f"{{{PODCAST}}}transcript") is not None,
+                "audio_url": _audio_url(item),
             }
         )
 

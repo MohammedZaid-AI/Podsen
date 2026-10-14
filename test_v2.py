@@ -590,9 +590,15 @@ def test_report_prints_groups_touched_beside_duplicate_catch_rate():
 FORBIDDEN_MODULES = {"spotify", "app"}
 FORBIDDEN_NAMES = {
     "uri", "tokens", "access_token", "refresh_token", "external_urls",
-    "resume_point", "duration_ms", "release_date", "session",
+    "resume_point", "duration_ms", "release_date",
 }
 FORBIDDEN_SUBSTRINGS = ("spotify:", "open.spotify.com", "api.spotify.com", "accounts.spotify.com")
+# The one Spotify string V2 may contain: a link-out search URL built from public RSS
+# text. Nothing is fetched from it and no Spotify data comes back.
+ALLOWED_LINKS = {"https://open.spotify.com/search/"}
+# The V2 app has its own login in the shared Flask cookie, under these keys only:
+# the user's id and the CSRF token. It may also mark the cookie permanent (30 days).
+V2_SESSION_KEYS = {"v2_user", "v2_csrf"}
 
 
 def _violations(tree, where):
@@ -613,9 +619,38 @@ def _violations(tree, where):
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             if node.value in FORBIDDEN_NAMES:
                 found.append(f"{where}: reads field {node.value!r}")
+            if node.value in ALLOWED_LINKS:
+                continue
             low = node.value.lower()
             found += [f"{where}: string mentions {s}" for s in FORBIDDEN_SUBSTRINGS if s in low]
     return found
+
+
+def _session_violations(tree, where):
+    """Every use of `session` must be session[K], session.get/pop(K) for K in
+    V2_SESSION_KEYS, or setting session.permanent.
+
+    Anything else (another key, the whole session, iterating it) could read V1's
+    Spotify tokens out of the shared cookie.
+    """
+    def is_key(node):
+        return isinstance(node, ast.Constant) and node.value in V2_SESSION_KEYS
+
+    def is_session(node):
+        return isinstance(node, ast.Name) and node.id == "session"
+
+    allowed = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript) and is_session(node.value) and is_key(node.slice):
+            allowed.add(id(node.value))
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and is_session(node.func.value) and node.func.attr in ("get", "pop")
+              and node.args and is_key(node.args[0])):
+            allowed.add(id(node.func.value))
+        elif isinstance(node, ast.Attribute) and is_session(node.value) and node.attr == "permanent":
+            allowed.add(id(node.value))
+    return [f"{where}:{n.lineno}: session used other than via {sorted(V2_SESSION_KEYS)}"
+            for n in ast.walk(tree) if is_session(n) and id(n) not in allowed]
 
 
 def test_v2_modules_never_import_spotify_or_read_spotify_fields():
@@ -623,7 +658,9 @@ def test_v2_modules_never_import_spotify_or_read_spotify_fields():
     assert len(files) >= 6, "scan must actually cover the V2 package"
     problems = []
     for f in files:
-        problems += _violations(ast.parse(f.read_text(encoding="utf-8")), f.relative_to(ROOT))
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        problems += _violations(tree, f.relative_to(ROOT))
+        problems += _session_violations(tree, f.relative_to(ROOT))
     assert problems == []
 
 
@@ -644,8 +681,8 @@ def test_label_routes_never_touch_the_spotify_session():
     problems = []
     for f in funcs:
         problems += _violations(f, f"app.py:{f.name}")
-        problems += [f"app.py:{f.name}: uses spotify" for n in ast.walk(f)
-                     if isinstance(n, ast.Name) and n.id == "spotify"]
+        problems += [f"app.py:{f.name}: uses {n.id}" for n in ast.walk(f)
+                     if isinstance(n, ast.Name) and n.id in ("spotify", "session")]
     assert problems == []
 
 
@@ -666,8 +703,16 @@ def test_label_file_with_a_spotify_field_is_rejected(tmp_path):
 
 def test_the_rule_check_itself_catches_a_violation():
     """Guard against the scan silently passing everything."""
-    bad = ast.parse("import spotify\nx = ep['uri']\nfrom flask import session\n")
+    bad = ast.parse("import spotify\nx = ep['uri']\ny = 'https://open.spotify.com/episode/1'\n")
     found = _violations(bad, "bad.py")
     assert any("import spotify" in s for s in found)
     assert any("'uri'" in s for s in found)
-    assert any("session" in s for s in found)
+    assert any("open.spotify.com" in s for s in found), "only the exact search prefix is allowed"
+    assert _violations(ast.parse("u = 'https://open.spotify.com/search/'"), "ok.py") == []
+
+    for leak in ("session['tokens']", "session.get('user')", "dict(session)", "x = session",
+                 "session.keys()", "session.clear()"):
+        assert _session_violations(ast.parse(leak), "bad.py"), leak
+    ok = ("session['v2_user'] = 1\nsession.get('v2_user')\nsession.pop('v2_user', None)\n"
+          "session['v2_csrf'] = 't'\nsession.permanent = True\n")
+    assert _session_violations(ast.parse(ok), "ok.py") == []
