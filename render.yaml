@@ -1,19 +1,16 @@
 # Render Blueprint. Free plan works but /data resets on each deploy;
-# the Starter plan keeps the disk (feedback log) between deploys.
+# the Starter plan keeps the disk (accounts, shows, feedback in podsen_v2.db).
 #
-# HEADS UP: Podsen now ranks on a LOCAL Ollama by default, and this container has no
-# Ollama in it — localhost:11434 here is the container, not your laptop. As written a
-# deploy from this file WILL fail at the first triage. Running locally behind a
-# cloudflared tunnel (see README) is the recommended setup and needs none of this.
-# To deploy anyway, set EITHER OLLAMA_BASE_URL to a reachable Ollama, OR
-# RANK_BACKEND=claude plus ANTHROPIC_API_KEY.
+# Untested since the move to the V2 app: running locally behind a cloudflared tunnel
+# (see README) is the verified setup. All V2 data is one SQLite file on the disk below,
+# so keep a single instance unless the database moves somewhere shared.
 services:
   - type: web
     name: podsen
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    # --timeout 300: triage blocks on the ranking call; the 30s default would kill it.
+    # --timeout 300: a first "today" run fetches every saved feed while the user waits.
     startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT --timeout 300 app:app
     envVars:
       - key: FLASK_ENV
@@ -24,22 +21,8 @@ services:
         generateValue: true
       - key: ADMIN_KEY
         generateValue: true
-      - key: SPOTIFY_CLIENT_ID
-        sync: false
-      - key: SPOTIFY_CLIENT_SECRET
-        sync: false
-      - key: BASE_URL
-        sync: false
-      # Ranking backend: "ollama" (default) or "claude".
-      - key: RANK_BACKEND
-        sync: false
-      # Must be an Ollama this container can reach over the network — localhost
-      # here is the CONTAINER, not your laptop. Required unless you set
-      # RANK_BACKEND=claude below.
-      - key: OLLAMA_BASE_URL
-        sync: false
-      # Only required when RANK_BACKEND=claude:
-      - key: ANTHROPIC_API_KEY
+      # Only for the v1_llm evaluation baseline; the app runs without it.
+      - key: GROQ_API_KEY
         sync: false
     disk:
       name: podsen-data

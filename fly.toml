@@ -8,14 +8,10 @@ primary_region = "iad"
   DATA_DIR = "/data"
   PORT = "3000"
 
-  # HEADS UP: Podsen now ranks on a LOCAL Ollama by default, and this container has
-  # no Ollama in it — localhost:11434 here is the container, not your laptop. As
-  # written, a deploy from this file WILL fail at the first triage.
-  #
-  # See the README: running locally + a cloudflared tunnel is the recommended setup
-  # and needs none of this. To deploy anyway, pick one and set it via `fly secrets set`:
-  #   1. OLLAMA_BASE_URL=https://<your-tunnel-or-gpu-box>   (reachable Ollama)
-  #   2. RANK_BACKEND=claude + ANTHROPIC_API_KEY            (no Ollama needed)
+  # Untested since the move to the V2 app: running locally behind a cloudflared tunnel
+  # (see README) is the verified setup. Set secrets with `fly secrets set`:
+  #   SESSION_SECRET and ADMIN_KEY (required), GROQ_API_KEY (only for the v1_llm
+  #   evaluation baseline). All V2 data is one SQLite file on the /data mount.
 
 [http_service]
   internal_port = 3000

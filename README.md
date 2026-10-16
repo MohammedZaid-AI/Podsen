@@ -2,139 +2,98 @@
 
 **Listen to what's worth it.**
 
-Triage for your Spotify podcast backlog. Connects to your account, finds unheard
-episodes across shows you already follow, and — given how much time you have right
-now — surfaces the 1–2 worth playing today with a one-line reason each, plus what's
-safe to skip. Nothing is deleted or skipped without you confirming. On confirm it
-can drop the picks into a private Spotify playlist.
+Triage for your podcast backlog. Make an account, add the shows you follow, and tell
+Podsen how much time you have right now. It reads each show's public feed and picks
+the recent episodes that fit that time, lists what's safe to skip, and gives you a
+way to play each pick: right in the page, or via Spotify, Apple Podcasts, YouTube or
+Amazon Music.
 
-Not a discovery tool. Metadata-only ranking (title + description + show + duration),
-no transcription.
+Not a discovery tool — only the shows you chose. Works with any show that has a
+public RSS feed; no streaming account is needed.
 
-## ⚠️ This runs on your machine
-
-Ranking calls the **hosted Groq API by default** (`GROQ_API_KEY` required). The app
-itself still runs on your machine, so it only works while your machine is on. The
-Dockerfile / fly.toml / render.yaml files are kept, but they predate the switch to
-Groq and **have not been re-tested since** — treat them as unverified.
-
-**Recommended setup for testers: run locally, share via a tunnel.**
-
-```powershell
-# terminal 1 — the app
-flask --app app run --port 3000
-
-# terminal 2 — a public https URL pointing at it
-cloudflared tunnel --url http://127.0.0.1:3000
-```
-
-Cloudflared prints an `https://<random>.trycloudflare.com` URL. Put that in `BASE_URL`,
-add `<that-url>/callback` to your Spotify app's redirect URIs, and send it to testers.
-Two minutes, no accounts, no cost. Tell testers the link is only live when you say it
-is — closing your laptop kills every in-flight session.
-
-Other options, in increasing order of effort, if the laptop dependency stops being
-acceptable:
-
-| Option | Testers get | Cost |
-|---|---|---|
-| **Local + cloudflared tunnel** (recommended) | Works while your machine is on | Free, 2 min |
-| Deploy the container (Fly / Render) | Always-on — once the deploy files are re-verified | host's pricing |
-| `RANK_BACKEND=claude` + `ANTHROPIC_API_KEY` | Same as above, Claude instead of Groq | ~$0.02/run |
-
-## Stack
-
-Python + **Flask**, server-rendered HTML, no build step and no client JS. Spotify Web
-API (Authorization Code OAuth) for auth/data/playlist — plain code, no AI. One LLM
-call for ranking + reasons, behind a swappable backend. State is an append-only JSONL
-event log you can `cat`.
-
-Flask because `flask.session` is a signed cookie — a direct match for how tokens are
-carried — and because form-driven server-rendered pages are exactly what it's for.
-
-| File | Role |
-|---|---|
-| `app.py` | Flask routes, the 6-step flow, `/admin` dump |
-| `spotify.py` | OAuth, token refresh, backlog fetch, playlist create — plain code |
-| `rank.py` | the one LLM call; both backends behind a single `rank()` |
-| `store.py` | append-only `events.jsonl` |
-| `views.py` | HTML builders |
-| `test_podsen.py` | pytest suite |
-
-## Ranking backends
-
-`RANK_BACKEND` picks one. **Default is `groq`** — leave it unset and set `GROQ_API_KEY`.
-
-| | `groq` (default) | `claude` |
-|---|---|---|
-| Needs | `GROQ_API_KEY` | `ANTHROPIC_API_KEY` |
-| Model | `GROQ_MODEL`, default `llama-3.3-70b-versatile` | `ANTHROPIC_MODEL` |
-| Backlog ranked | 40 episodes | 50 episodes |
-
-Both share prompt building, JSON repair and parsing — only the transport differs.
-Models occasionally emit malformed JSON (an unescaped quote inside a reason);
-`rank()` retries once with a corrective instruction before failing. The `claude`
-backend has only been verified against stubs, never the live API.
-
-The project used a local Ollama backend until commit `918b147`; its notes are in git
-history if a local backend is ever wanted again.
-
-## Setup
-
-### 1. Groq key (~2 min)
-
-Create a key at https://console.groq.com/keys and put it in `.env` as `GROQ_API_KEY`.
-
-### 2. Spotify app (~3 min)
-
-1. https://developer.spotify.com/dashboard → **Create app**.
-2. Redirect URI: add `http://127.0.0.1:3000/callback` (and your tunnel URL + `/callback`).
-3. APIs used: **Web API**.
-4. Copy the **Client ID** and **Client secret** into `.env`.
-5. The app starts in **Development Mode** — under **User Management**, add the
-   Spotify account email of every tester (you first). Max 25. No review needed.
-
-### 3. Run it
+## Run it
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1        # source .venv/bin/activate elsewhere
 pip install -r requirements.txt
-copy .env.example .env              # fill in the Spotify values and GROQ_API_KEY
+copy .env.example .env              # set SESSION_SECRET and ADMIN_KEY
 flask --app app run --port 3000     # `flask run` is what reads .env
 ```
 
-Open http://127.0.0.1:3000.
+Open http://127.0.0.1:3000 — it goes straight to the app at `/v2/`. Sign up, add 3 or
+more shows, pick a time.
 
-### 4. Read the validation signal
+To share with testers, run it on your machine and put a tunnel in front:
 
-`/admin?key=YOUR-ADMIN-KEY` — JSON dump of every event (triage runs, what was
-confirmed, feedback answers). Or `cat data/events.jsonl`.
+```powershell
+cloudflared tunnel --url http://127.0.0.1:3000
+```
+
+Cloudflared prints an `https://<random>.trycloudflare.com` URL to send out. The link
+only works while your machine is on and the app is running.
+
+## How it works
+
+| Step | How |
+|---|---|
+| Accounts | email + password (hashed with werkzeug), stored in SQLite at `data/podsen_v2.db` |
+| Find shows | Apple's free iTunes Search API. Shows with no public feed are marked "No public feed, can not be analyzed" |
+| Backlog | episodes from the last 30 days of each saved feed, minus ones you marked heard |
+| Picks | `v2/engine.py` `pick()`, currently newest-first, filling the time budget. The budget is a hard cap, enforced in code |
+| Play | an in-page audio player from the feed, plus Spotify search, Apple Podcasts (the exact episode when it can be matched, otherwise a search), YouTube search, Amazon Music search |
+| Feedback | "Was this worth your time?" yes / somewhat / no, saved with the picks |
+
+A show whose feed fails to load is named on the results page — picks from a partial
+backlog never look complete. Logins last 30 days; every form is CSRF-protected; failed
+logins are throttled per email and IP. Users can delete their account and all its data
+from the Account page. See `/v2/privacy` for what is stored.
+
+Python + **Flask**, server-rendered HTML, no build step and no client JS.
+
+## Evaluating pick methods
+
+Podsen is still validating whether its picks are any good. A new pick method only
+replaces newest-first if it clearly beats it on hand-labeled backlogs.
+
+1. Open http://127.0.0.1:3000/label (this machine only, or `?key=ADMIN_KEY`).
+2. Paste RSS feed URLs, a time budget and what you want from the slot; label each
+   episode *want* / *don't want* / *would regret skipping*.
+3. Run `python -m v2.report` for a table of every method with 95% confidence intervals.
+
+`python -m v2.report --dir v2/sample_data` runs it on three FAKE sample backlogs.
+The `v1_llm` method ranks with an LLM through `rank.py` and needs `GROQ_API_KEY`
+(or `RANK_BACKEND=claude` + `ANTHROPIC_API_KEY`); without a key its row is skipped.
+
+## Operator pages
+
+- `/admin?key=YOUR-ADMIN-KEY` — every run and feedback answer as JSON (no emails or
+  password hashes).
+- `/label` — see above.
 
 ## Tests
 
 ```
 pip install pytest
-python -m pytest test_podsen.py test_v2.py -q
+python -m pytest test_rank.py test_v2.py test_v2_app.py -q
 ```
 
-`test_podsen.py` (V1) covers unheard detection, model-output parsing and the
-JSON-repair retry, the pick/skip overlap guard, backend selection, Groq request and
-error handling, fan-out failure reporting, the JSONL event format, and HTML escaping.
-`test_v2.py` covers the V2 evaluation setup (see CLAUDE.md). Transport stubs are test doubles — the app itself still
-shows nothing that didn't come from real Spotify data.
+`test_rank.py` covers the LLM ranking layer (budget filter, JSON repair and retry,
+Groq and Claude call handling). `test_v2.py` covers the RSS loader, label files,
+pick methods, metrics, the report, `/label`, and the data rule. `test_v2_app.py`
+covers the app: accounts, CSRF, throttling, shows, picks, links, feedback, deletion
+and `/admin`. Apple and every feed are stubbed — no network needed.
 
-## Known corners (fine for a prototype)
+## Data rule
 
-- Heard/unheard = Spotify `resume_point` + last 50 recently-played. If Spotify
-  returns no `resume_point` (scope/market quirk) an episode counts as unheard.
-- Scans newest 20 episodes of up to 50 followed shows; ranks the 40 most recent unheard.
-- A show that fails mid-fan-out (rate limit, region lock, expired token) is reported
-  on the results page, not silently dropped — a partial triage never looks complete.
-- Triage is one blocking ~18s request with no progress UI.
-- Session (incl. Spotify tokens) lives in a signed cookie.
+Spotify's developer policy forbids feeding Spotify data into AI/ML models, so Podsen
+uses only public RSS data and labels people type in. The "Spotify" link on a pick is a
+plain search link; Podsen never calls a Spotify API. `test_v2.py` fails if anything
+imports a `spotify` module or a Spotify API URL appears anywhere in the repo.
 
-## legacy-js/
+## Deploying
 
-The original Node implementation, kept because this repo started without git history.
-Delete it once you're happy: `git rm -r legacy-js`.
+`Dockerfile`, `fly.toml` and `render.yaml` are kept but untested since the move to the
+current app. All data is one SQLite file, so run a single instance with a persistent
+disk, and give gunicorn `--timeout 300` (a first run fetches every feed while the user
+waits).

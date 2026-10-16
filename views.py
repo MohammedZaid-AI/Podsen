@@ -1,4 +1,7 @@
-"""Server-rendered HTML. No templates directory, no client JS, no build step."""
+"""The shared HTML shell: esc() and page(). No templates directory, no client JS, no build step.
+
+Page bodies are built in v2/app_views.py (the app) and v2/label_views.py (/label).
+"""
 
 from html import escape
 
@@ -57,7 +60,6 @@ def page(title: str, body: str, hero: bool = False) -> str:
   .card {{ border: 1px solid #2a2c31; border-radius: 12px; padding: 16px; margin: 10px 0; background: #16171b; }}
   .pick {{ border-color: #1db954; }}
   .meta {{ color: #9aa0a6; font-size: 14px; }}
-  .reason {{ margin: 8px 0 0; }}
   .skip {{ padding: 10px 0; border-bottom: 1px solid #23252a; }}
   .skip:last-child {{ border-bottom: 0; }}
   button, .btn {{ font: inherit; background: #1db954; color: #06240f; border: 0;
@@ -69,11 +71,6 @@ def page(title: str, body: str, hero: bool = False) -> str:
   .row {{ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }}
   textarea {{ width: 100%; font: inherit; background: #16171b; color: #e9e9ec; border: 1px solid #2a2c31; border-radius: 8px; padding: 10px; }}
   a {{ color: #6fd08c; }}
-  .shows {{ border: 1px solid #2a2c31; border-radius: 10px; padding: 10px 14px;
-    margin: 0 0 24px; background: #16171b; }}
-  .shows summary {{ cursor: pointer; color: #9aa0a6; font-size: 14px; }}
-  .showlist {{ margin-top: 10px; max-height: 320px; overflow-y: auto; }}
-  .showlist label {{ font-size: 15px; }}
   .warn {{ border: 1px solid #5a4a1e; background: #241f12; color: #e8d9a8;
     border-radius: 10px; padding: 12px 14px; margin: 12px 0 0; font-size: 14px; }}
   pre {{ white-space: pre-wrap; word-break: break-word; }}
@@ -81,180 +78,3 @@ def page(title: str, body: str, hero: bool = False) -> str:
 {header}
 {body}
 </main></body></html>"""
-
-
-def landing() -> str:
-    return """<p class="standfirst">Your backlog isn't a debt.</p>
-<p>Podsen looks at all the episodes you haven't listened to yet and figures out 
-what is actually worth your time. Just tell it how much time you have, and it picks 
-the one or two episodes you should listen to right now, while letting you know what you can safely skip.</p>
-<p class="meta">Nothing is skipped or deleted unless you say so.</p>
-<p style="margin-top:24px"><a class="btn" href="/login">Connect Spotify</a></p>"""
-
-
-def show_picker(shows: list[dict], selected: set | None) -> str:
-    """Which shows this run covers. Collapsed by default so the common path is one click.
-
-    <details> is a native element - no client JS, matching the rest of the app.
-    `selected=None` means every show, including any followed later.
-    """
-    if not shows:
-        return ""
-    total = len(shows)
-    chosen = [sh for sh in shows if selected is None or sh.get("id") in selected]
-    n = len(chosen)
-
-    if selected is None or n == total:
-        summary = f"Scanning all {total} shows"
-    else:
-        summary = f"Scanning {n} of your {total} shows"
-
-    boxes = "".join(
-        '<label><input type="checkbox" name="show" value="{sid}"{checked}> {name}</label>'.format(
-            sid=esc(sh.get("id")),
-            checked=" checked" if (selected is None or sh.get("id") in selected) else "",
-            name=esc(sh.get("name")),
-        )
-        for sh in shows
-    )
-    reset = (
-        '' if (selected is None or n == total)
-        else '<p style="margin:10px 0 0"><a href="/shows/all">Select all shows</a></p>'
-    )
-    # Marker so the server can tell "user unticked everything" (no `show` fields sent)
-    # apart from "no picker on this page". Browsers omit unchecked boxes entirely.
-    return f"""<input type="hidden" name="show_picker" value="1">
-<details class="shows">
-  <summary>{esc(summary)} &mdash; change</summary>
-  <div class="showlist">{boxes}{reset}</div>
-</details>"""
-
-
-def time_form(user: dict | None, shows: list[dict] | None = None, selected: set | None = None) -> str:
-    name = esc((user or {}).get("name"))
-    return f"""<p>Connected as <strong>{name}</strong>. <a href="/logout">Log out</a></p>
-<form method="post" action="/triage">
-  {show_picker(shows or [], selected)}
-  <h2>How much time do you have right now?</h2>
-  <div class="row">
-    <button name="minutes" value="15">15 min</button>
-    <button name="minutes" value="30">30 min</button>
-    <button name="minutes" value="60">60 min</button>
-  </div>
-  <div class="row" style="margin-top:12px">
-    <input type="number" name="custom_minutes" min="1" max="600" value="45">
-    <button class="secondary" name="minutes" value="custom">Go</button>
-  </div>
-</form>
-<p class="meta" style="margin-top:20px">Scanning your backlog + ranking takes ~10&ndash;20 seconds.</p>"""
-
-
-def dropped_note(dropped) -> str:
-    """Say plainly that this triage did not see the whole backlog.
-
-    Silence here is the actual bug: picks chosen from a partial backlog look exactly
-    like picks chosen from a complete one.
-    """
-    if not dropped:
-        return ""
-    names = ", ".join(sorted({d["show"] for d in dropped}))
-    reasons = ", ".join(sorted({d["reason"] for d in dropped}))
-    n = len({d["id"] for d in dropped})
-    return (
-        f'<p class="warn">Couldn\'t check {n} of your shows this time '
-        f"({esc(reasons)}): {esc(names)}. These picks were chosen from the rest of "
-        "your backlog &mdash; try again in a moment for the full picture.</p>"
-    )
-
-
-def nothing_fits(minutes: int, shortest: int | None, backlog: int, dropped=None) -> str:
-    """Say the budget can't be met rather than returning something twice as long."""
-    tail = (
-        f" The shortest unheard episode you have is <strong>{esc(shortest)} min</strong>."
-        if shortest
-        else ""
-    )
-    return f"""<p class="meta">{esc(backlog)} unheard episodes &middot; {esc(minutes)} min budget</p>
-<p class="warn">Nothing in your backlog fits {esc(minutes)} minutes.{tail}
-Try a longer window rather than starting something you can't finish.</p>
-{dropped_note(dropped)}
-<p style="margin-top:20px"><a class="btn" href="/app">Pick a different time</a></p>"""
-
-
-def results(sid, minutes, picks, skips, backlog, shows_scanned, dropped=None, shows_followed=None) -> str:
-    def pick(p):
-        return f"""<div class="card pick">
-    <label class="row" style="align-items:flex-start">
-      <input type="checkbox" name="pick" value="{esc(p['id'])}" checked style="margin-top:5px">
-      <span><strong>{esc(p['title'])}</strong><br>
-      <span class="meta">{esc(p['show'])} &middot; {esc(p['duration_min'])} min</span>
-      <span class="reason">{esc(p['reason'])}</span></span>
-    </label></div>"""
-
-    def skip(s):
-        return f"""<div class="skip"><strong>{esc(s['title'])}</strong>
-    <span class="meta">&mdash; {esc(s['show'])}</span><br><span class="reason">{esc(s['reason'])}</span></div>"""
-
-    picks_html = "".join(pick(p) for p in picks) or (
-        "<p>No strong pick &mdash; everything in the backlog is low-priority right now.</p>"
-    )
-    scope = (
-        f"{esc(shows_scanned)} of your {esc(shows_followed)} shows"
-        if shows_followed and shows_followed != shows_scanned
-        else f"{esc(shows_scanned)} shows"
-    )
-    return f"""<p class="meta">{esc(backlog)} unheard episodes across {scope} &middot; {esc(minutes)} min budget</p>
-{dropped_note(dropped)}
-<form method="post" action="/confirm">
-  <input type="hidden" name="sid" value="{esc(sid)}">
-  <h2>Worth it today</h2>
-  {picks_html}
-  <h2>Safe to skip</h2>
-  {"".join(skip(s) for s in skips)}
-  <p style="margin-top:24px"><label><input type="checkbox" name="make_playlist" checked>
-    Put the checked picks in a private Spotify playlist</label></p>
-  <button>Confirm</button>
-  <a class="btn secondary" href="/app" style="margin-left:8px">Back</a>
-</form>"""
-
-
-def done(sid, picks, playlist) -> str:
-    items = "".join(
-        f"<li><strong>{esc(p['title'])}</strong> &mdash; {esc(p['show'])}</li>" for p in picks
-    )
-    body = f"<ul>{items}</ul>" if picks else "<p>Nothing selected.</p>"
-    pl = ""
-    if playlist and playlist.get("url"):
-        pl = (
-            f'<p style="margin:16px 0"><a class="btn" href="{esc(playlist["url"])}" '
-            'target="_blank" rel="noopener">Open playlist in Spotify</a></p>'
-        )
-        # Spotify sometimes refuses to make a playlist private. Never let the UI imply
-        # privacy we could not actually confirm.
-        if playlist.get("public"):
-            pl += (
-                '<p class="warn">Spotify made this playlist <strong>public</strong> '
-                "despite the request to keep it private &mdash; anyone with the link can "
-                "see it. You can switch it to private in Spotify.</p>"
-            )
-    return f"""<h2>Confirmed</h2>
-{body}
-{pl}
-<h2>One question</h2>
-<form method="post" action="/feedback">
-  <input type="hidden" name="sid" value="{esc(sid)}">
-  <p>Was this useful?</p>
-  <label><input type="radio" name="useful" value="yes" required> Yes, I'd use it again</label>
-  <label><input type="radio" name="useful" value="somewhat"> Somewhat</label>
-  <label><input type="radio" name="useful" value="no"> No</label>
-  <p style="margin-top:16px">Would you pay for this?</p>
-  <label><input type="radio" name="pay" value="yes" required> Yes</label>
-  <label><input type="radio" name="pay" value="maybe"> Maybe</label>
-  <label><input type="radio" name="pay" value="no"> No</label>
-  <p style="margin-top:16px"><textarea name="note" rows="3" placeholder="Anything else? (optional)"></textarea></p>
-  <button>Send</button>
-</form>"""
-
-
-def thanks() -> str:
-    return '<p>Thanks &mdash; noted.</p><p><a href="/app">Run it again</a></p>'

@@ -127,7 +127,7 @@ def fit_to_budget(episodes: list[dict], minutes: int) -> tuple[list[dict], int |
 
 def build_prompt(episodes: list[dict], minutes: int, max_episodes: int, desc_chars: int):
     candidates = episodes[:max_episodes]
-    # Models copy a short integer far more reliably than a 22-char Spotify id.
+    # Models copy a short integer far more reliably than a long episode guid.
     listing = [
         {
             "n": i + 1,

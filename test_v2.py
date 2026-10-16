@@ -583,16 +583,20 @@ def test_report_prints_groups_touched_beside_duplicate_catch_rate():
     assert total == 2 and 0 < touched < 2 and not float(touched).is_integer()
 
 
-# --- data rule: V2 never touches Spotify data -----------------------------------------
-# Spotify's developer policy forbids feeding Spotify data into AI/ML models. V2 may use
-# only public RSS data and labels typed in by the user.
+# --- data rule: no Spotify data, no Spotify API ---------------------------------------
+# Spotify's developer policy forbids feeding Spotify data into AI/ML models. Podsen uses
+# only public RSS data and labels typed in by the user. The old Spotify integration
+# (spotify.py) is gone; these tests keep any of it from coming back.
 
+# Built by concatenation so this file never contains the hosts it scans the repo for.
+_SPOTIFY_COM = "spotify" + ".com"
+SPOTIFY_API_HOSTS = ("api." + _SPOTIFY_COM, "accounts." + _SPOTIFY_COM)
 FORBIDDEN_MODULES = {"spotify", "app"}
 FORBIDDEN_NAMES = {
     "uri", "tokens", "access_token", "refresh_token", "external_urls",
     "resume_point", "duration_ms", "release_date",
 }
-FORBIDDEN_SUBSTRINGS = ("spotify:", "open.spotify.com", "api.spotify.com", "accounts.spotify.com")
+FORBIDDEN_SUBSTRINGS = ("spotify:", "open." + _SPOTIFY_COM, *SPOTIFY_API_HOSTS)
 # The one Spotify string V2 may contain: a link-out search URL built from public RSS
 # text. Nothing is fetched from it and no Spotify data comes back.
 ALLOWED_LINKS = {"https://open.spotify.com/search/"}
@@ -630,8 +634,8 @@ def _session_violations(tree, where):
     """Every use of `session` must be session[K], session.get/pop(K) for K in
     V2_SESSION_KEYS, or setting session.permanent.
 
-    Anything else (another key, the whole session, iterating it) could read V1's
-    Spotify tokens out of the shared cookie.
+    Anything else (another key, the whole session, iterating it) reads state this
+    code doesn't own; keeping the keys explicit keeps the cookie's contents auditable.
     """
     def is_key(node):
         return isinstance(node, ast.Constant) and node.value in V2_SESSION_KEYS
@@ -664,16 +668,64 @@ def test_v2_modules_never_import_spotify_or_read_spotify_fields():
     assert problems == []
 
 
-def test_v2_does_not_pull_in_spotify_transitively():
-    code = (
-        "import sys; import v2, v2.rss, v2.dataset, v2.baselines, v2.metrics, "
-        "v2.report, v2.label_views; print('spotify' in sys.modules)"
-    )
+def _repo_files() -> list[Path]:
+    """Every file in the repo: tracked, plus untracked-but-not-ignored (so new files
+    count before they are committed). .env and data/ are gitignored and excluded."""
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=ROOT, capture_output=True, check=True,
+    ).stdout.decode("utf-8")
+    return [ROOT / f for f in out.split("\0") if f and (ROOT / f).is_file()]
+
+
+def _imports_spotify(tree) -> list[int]:
+    lines = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(a.name.split(".")[0] == "spotify" for a in node.names):
+            lines.append(node.lineno)
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "spotify":
+            lines.append(node.lineno)
+    return lines
+
+
+def _api_url_hits(data: bytes) -> list[str]:
+    low = data.lower()
+    return [h for h in SPOTIFY_API_HOSTS if h.encode() in low]
+
+
+def test_nothing_in_the_repo_imports_a_spotify_module():
+    files = [f for f in _repo_files() if f.suffix == ".py"]
+    assert len(files) >= 15, "scan must actually cover the repo"
+    assert not (ROOT / "spotify.py").exists()
+    problems = [f"{f.relative_to(ROOT)}:{n}" for f in files
+                for n in _imports_spotify(ast.parse(f.read_text(encoding="utf-8")))]
+    assert problems == []
+
+
+def test_no_spotify_api_url_appears_anywhere_in_the_repo():
+    """Any file, any type: code, docs, deploy config. The open.spotify.com/search/
+    link-out in v2/app_views.py is not an API URL and stays allowed."""
+    files = _repo_files()
+    assert any(f.suffix == ".md" for f in files) and any(f.suffix == ".py" for f in files)
+    problems = [f"{f.relative_to(ROOT)}: {h}" for f in files for h in _api_url_hits(f.read_bytes())]
+    assert problems == []
+
+
+def test_the_whole_app_loads_without_a_spotify_module():
+    code = "import sys, app, rank, v2.report; print('spotify' in sys.modules)"
     out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
 
 
-def test_label_routes_never_touch_the_spotify_session():
+def test_the_repo_scans_catch_a_planted_violation():
+    assert _imports_spotify(ast.parse("import spotify\nfrom spotify.api import x\n")) == [1, 2]
+    assert _imports_spotify(ast.parse("import spotify_helpers_not_it\n")) == []
+    planted = ("see https://" + SPOTIFY_API_HOSTS[0].upper() + "/v1/me").encode()
+    assert _api_url_hits(planted) == [SPOTIFY_API_HOSTS[0]]
+    assert _api_url_hits(b"https://open.spotify.com/search/x") == []
+
+
+def test_label_routes_never_touch_the_session():
     tree = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
     funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)
              and (n.name.startswith("label_") or n.name == "_draft_path")]

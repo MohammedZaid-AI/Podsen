@@ -680,6 +680,85 @@ def test_old_database_gets_the_ip_column(tmp_path, monkeypatch):
     assert len(pair) == 1 and len(by_ip) == 1
 
 
+# --- home page, removed V1 routes, /admin ----------------------------------------------
+
+def test_home_page_redirects_to_the_v2_app(client):
+    r = client.get("/")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/v2/")
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("get", "/login"), ("get", "/callback"), ("get", "/app"), ("get", "/shows/all"),
+     ("post", "/triage"), ("post", "/confirm"), ("post", "/feedback"), ("get", "/logout")],
+)
+def test_old_v1_routes_are_gone(client, method, path):
+    assert getattr(client.c, method)(path).status_code == 404
+
+
+def test_admin_needs_the_key(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_KEY", "s3cret")
+    assert client.get("/admin").status_code == 403
+    assert client.get("/admin?key=wrong").status_code == 403
+    monkeypatch.setenv("ADMIN_KEY", "")
+    assert client.get("/admin?key=").status_code == 403
+
+
+def test_admin_shows_v2_runs_and_feedback_without_personal_data(client, monkeypatch):
+    import json
+
+    monkeypatch.setenv("ADMIN_KEY", "s3cret")
+    signup(client)
+    add(client, "101", "102", "103")
+    run, run_id = run_today(client, 30)
+    client.post("/v2/feedback", data={"run": run_id, "verdict": "yes"})
+
+    r = client.get("/admin?key=s3cret")
+    assert r.status_code == 200 and r.mimetype == "application/json"
+    data = json.loads(r.get_data(as_text=True))
+    (row,) = data["runs"]
+    assert row["id"] == run_id and row["budget"] == 30 and row["engine"] == "newest_first"
+    assert [p["id"] for p in row["picks"]] == [p["id"] for p in run["payload"]["picks"]]
+    assert [f["verdict"] for f in data["feedback"]] == ["yes"]
+    body = r.get_data(as_text=True)
+    assert "me@example.com" not in body and "password" not in body and "scrypt" not in body
+
+
+# --- page shell (views.page), moved from test_podsen.py ---------------------------------
+
+import views  # noqa: E402
+
+
+def test_page_renders_tagline_in_two_parts():
+    """The tagline is one sentence split into an italic lede and an upright rest."""
+    html = views.page("Podsen", "<p>hi</p>")
+    assert f'<span class="lede">{views.HERO_LEDE}</span>' in html
+    assert f'<span class="rest">{views.HERO_REST}</span>' in html
+    # reassembling the spans must give back the original sentence
+    assert f"{views.HERO_LEDE} {views.HERO_REST}" == "Listen to what's worth it."
+
+
+def test_hero_only_on_the_landing_page():
+    """Display type is for the hero; inner pages keep it at brand size."""
+    hero = views.page("Podsen", "<p>hi</p>", hero=True)
+    inner = views.page("Podsen", "<p>hi</p>")
+    assert '<h1 class="hero">' in hero and '<p class="wordmark">' in hero
+    assert '<h1 class="hero">' not in inner and '<p class="tagline">' in inner
+
+
+def test_every_page_has_exactly_one_h1():
+    for html in (views.page("Podsen", "<p>hi</p>", hero=True), views.page("Podsen", "<p>hi</p>")):
+        assert html.count("<h1") == 1
+
+
+def test_accent_colour_is_a_variable_not_a_literal():
+    html = views.page("Podsen", "<p>hi</p>", hero=True)
+    assert "--accent-coral: #E8637A;" in html
+    assert "color: var(--accent-coral);" in html
+    # the coral must not be hardcoded anywhere outside the token definition
+    assert html.count("#E8637A") == 1
+
+
 # --- data rule ----------------------------------------------------------------------------
 
 def test_v2_package_never_imports_spotify():

@@ -1,8 +1,11 @@
 # Podsen
 
-Triage for a Spotify podcast backlog. Given how much time the user has right now,
-surface the 1–2 unheard episodes worth playing today with a one-line reason each,
-plus what's safe to skip. Not a discovery tool — only shows they already follow.
+Podcast triage. Users make an account, add the shows they follow (found through
+Apple's free iTunes search), and say how much time they have right now. Podsen reads
+each show's public RSS feed and picks the set of recent episodes that fits that time,
+lists what's safe to skip, and gives play links for each pick: an in-page audio
+player, Spotify search, Apple Podcasts (exact episode when it can be matched),
+YouTube search and Amazon Music search. Not a discovery tool — only shows they chose.
 
 Target user: follows 10+ shows, 100+ unheard episodes, refuses to unsubscribe.
 Wants help deciding, not permission to prune.
@@ -13,155 +16,120 @@ Wants help deciding, not permission to prune.
 
 ```bash
 .venv\Scripts\Activate.ps1
-flask --app app run --port 3000       # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_podsen.py test_v2.py test_v2_app.py -q   # 201 tests (71 V1 + 81 V2 eval + 49 V2 app)
-python -m v2.report --dir v2/sample_data       # V2 eval report on FAKE samples
+flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
+python -m pytest test_rank.py test_v2.py test_v2_app.py -q   # 176 tests
+python -m v2.report                  # compare pick methods on data/labels/
+python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 ```
+
+`/` redirects to the app at `/v2/`. `/label` (hand-label backlogs for evaluation) and
+`/admin?key=ADMIN_KEY` (runs + feedback as JSON) are operator pages.
 
 There is **no auto-reload** — after editing, kill the process on port 3000 and
-restart, or you will test stale code. Verifying a change by curling the running
-server without restarting has produced false "the fix didn't work" conclusions.
+restart, or you will test stale code. Verifying a change against a server that wasn't
+restarted has produced false "the fix didn't work" conclusions before.
 
-## Architecture
+## Files
 
 | File | Role |
 |---|---|
-| `app.py` | Flask routes, the 6-step flow, `/admin` dump |
-| `spotify.py` | OAuth, token refresh, backlog fetch, playlist create |
-| `rank.py` | the only LLM call; groq (default) + claude behind one `rank()` |
-| `store.py` | append-only `events.jsonl` |
-| `views.py` | HTML string builders |
+| `app.py` | Flask app: registers the V2 Blueprint, `/` redirect, `/label`, `/admin` |
+| `views.py` | shared HTML shell: `esc()` and `page()` (styles, header) |
+| `rank.py` | the only LLM call; Groq (default) or Claude behind one `rank()` |
+| `v2/web.py` | the app's routes (Blueprint under `/v2`): accounts, shows, today, runs |
+| `v2/app_views.py` | the app's HTML builders, play/search links |
+| `v2/db.py` | SQLite at `DATA_DIR/podsen_v2.db`: users, shows, heard, runs, feedback, caches |
+| `v2/itunes.py` | Apple iTunes search/lookup, incl. a show's episode list |
+| `v2/rss.py` | RSS → episodes (stdlib). Durations round UP: the budget is a hard cap |
+| `v2/backlog.py` | a user's backlog: last 30 days of their feeds, minus heard; feed cache |
+| `v2/engine.py` | `pick()` — the ONE place the pick method is chosen (now `newest_first`) |
+| `v2/links.py` | exact-episode Apple Podcasts links (guid, then exact title) |
+| `v2/baselines.py` | `newest_first`, `random_fill`, `v1_llm` (uses `rank.py`) |
+| `v2/dataset.py` | label file format + validation, saved under `DATA_DIR/labels/` |
+| `v2/metrics.py`, `v2/report.py` | evaluation metrics, bootstrap CIs, `python -m v2.report` |
+| `v2/label_views.py` | HTML for `/label` |
+| `v2/sample_data/` | 3 **FAKE** labeled backlogs so the report runs without real labels |
 
-**The AI boundary is deliberate.** Only relevance judgement and reason-writing go to
-the model. Auth, data fetching, playlist creation, and anything numeric stay as plain
-code. When something is arithmetic, enforce it in code — see the time-budget note below.
-
-Flow: connect Spotify → time budget → scan backlog → rank → confirm → playlist +
-feedback. Nothing is hidden, skipped or deleted without an explicit confirm.
-
-## Gotchas that cost real time — do not rediscover these
-
-*The next two are historical: the Ollama backend was removed in `918b147` (switched
-to Groq). Keep them in case a local backend comes back.*
-
-**Ollama `/v1` silently ignores `options.num_ctx`.** It caps every request at exactly
-4096 tokens total regardless of what you pass, which truncates the ~6.8k backlog
-prompt mid-answer and surfaces as an unrelated-looking JSON parse error. Only the
-native `/api/chat` endpoint honours it. That is why the Ollama backend used it rather
-than the OpenAI-compatible endpoint despite it being more portable.
-
-**`think: false` is 2.8× faster** on gemma4:e4b (16s vs 45s) with no quality loss on
-this task, and stops reasoning tokens crowding out the JSON.
+## Lessons that cost real time — keep them
 
 **Never ask the model to respect a hard number.** A 15-minute budget once returned a
-61-minute episode and a 60-minute budget returned 119 minutes of audio. `fit_to_budget()`
-now filters candidates before ranking so the model only sees episodes that fit. If a
-future constraint is numeric, filter in code — do not add it to the prompt.
+61-minute episode and a 60-minute budget returned 119 minutes of audio. Anything
+numeric — the time budget above all — is enforced in code. `rank.fit_to_budget()`
+filters before the model sees anything; every V2 method goes through a hard cap
+(`baselines.enforce_budget`, re-checked in `engine.pick()`).
 
-**Spotify does not honour `public: false` on playlist creation.** A playlist created
-that way was confirmed world-readable with an app-only token. `create_playlist` forces
-it with a follow-up `PUT` and *reads the value back*; the UI warns if it's still public.
-Never report privacy you haven't verified.
+**Report partial results; never hide them.** A feed that fails to load is shown on
+the results page ("Could not load 1 show: X"), never silently dropped — picks from
+a partial backlog must not look complete. Same in `/label` and the report (a method
+that errors shows FAILED, not a partial row).
 
-**Spotify requires the app owner to have Premium** (Feb 2026 change), enforced at
-request time on existing apps too, not just at app creation. Dev Mode is capped at
-**5 test users**. Without Premium, `GET /me` returns 403 and nothing works.
+**Escape every interpolated value** with `views.esc()`. Episode titles, descriptions,
+show names and every URL come from public feeds or Apple and are untrusted. Outbound
+search links are URL-encoded *and* HTML-escaped; only http(s) audio and https Apple
+links are ever rendered.
 
-**Redirect URI must be `127.0.0.1`, not `localhost`** — Spotify rejects the latter.
+**Never claim more than a link does.** "Open in Apple Podcasts" only when the exact
+episode was matched; otherwise "Search on Apple Podcasts". YouTube and Amazon Music
+are labelled as searches.
 
-**Flask's session is request-context-bound and not thread-safe.** The per-show fan-out
-refreshes the token once *before* spawning threads and workers never touch the session.
-A show that fails anyway is reported via `dropped`, never silently omitted — a partial
-triage must never look complete.
+## Rules
 
-**Gunicorn needs `--timeout 300`.** Triage blocks on the ranking call; the 30s default
-kills the worker mid-run.
-
-## Constraints
-
+- **Data rule: public RSS + hand labels only.** Spotify's developer policy bars feeding
+  Spotify data into AI/ML. No module named `spotify` may be imported anywhere, and no
+  Spotify API URL may appear in the repo; the only Spotify string allowed is the
+  `open.spotify.com/search/` link-out. `test_v2.py` enforces this (AST + repo scan) —
+  don't weaken it to make something pass.
 - No client JS, no build step, no templates directory. Server-rendered strings only.
-- **No mock data in the product flow.** Test doubles in `test_podsen.py` are fine;
-  the app must never show a pick that didn't come from real user data.
-- Escape every interpolated value in `views.py` (`esc()`); episode titles are untrusted.
-- `data/` and `.env` are gitignored — real listening history must never be committed.
+- No mock data in the product flow. Test doubles are fine; the FAKE samples are for
+  the report only and are marked FAKE in their names and contents.
+- `data/` and `.env` are gitignored — real user data and labels must never be committed.
 
-## Hosting reality
+## How the app works
 
-Ranking now calls the **hosted Groq API by default** (needs `GROQ_API_KEY`). The old
-blocker for `Dockerfile` / `fly.toml` / `render.yaml` (a container can't reach a local
-Ollama at `localhost:11434`) no longer applies, but none of them has been re-tested
-since the switch — treat them as unverified. Recommended: run locally, share via
-`cloudflared tunnel`. See README for the alternatives.
+- **Accounts:** email + werkzeug-hashed password. Logins last 30 days (permanent
+  session, `PERMANENT_SESSION_LIFETIME`). Session keys: only `v2_user`, `v2_csrf`.
+- **CSRF:** every `/v2` POST needs `csrf_token` (checked in `web.py` `before_request`,
+  400 otherwise). New POST forms must include `_csrf(csrf)`.
+- **Login throttle (15 min):** 5 failures per email *from one IP*, 20 per IP overall.
+  Per-IP keying stops one person locking out someone else.
+- **Delete my account** (`/v2/account`, password + same throttle) removes the user and
+  every row of theirs.
+- **Add show** takes only the iTunes id and re-looks up the feed URL from Apple, so a
+  form can't make the server fetch an arbitrary URL. Shows with no public feed are
+  shown as "No public feed, can not be analyzed".
+- **Backlog:** last `RECENT_DAYS` (30) of saved feeds minus heard; undated episodes
+  are left out. Feeds cached 1 h, Apple episode lists 6 h, both in SQLite.
 
-## Current state / known weak spots
+## Evaluation (Phase 0)
 
-- `RANK_BACKEND` defaults to `groq` (`GROQ_MODEL`, default `llama-3.3-70b-versatile`).
-  `claude` works but **has never been executed against the live API** — no key has ever
-  been available in this project. It is verified only against stubs and the SDK signature.
-- Models occasionally emit malformed JSON (unescaped quote in a reason); `rank()`
-  retries once with a corrective hint, then fails with a clear message.
-- `legacy-js/` is the superseded Node implementation, kept only because the repo began
-  without git history. Safe to delete.
-- Feedback in `events.jsonl` so far is the builder's own — not yet a validation signal.
+V2 is set selection under a time budget. A new pick method must beat the best earlier
+one by a meaningful margin on labeled backlogs or it is cut; simpler wins ties. If
+nothing clearly beats `newest_first`, say so.
 
-## V2 app — the new product flow (`/v2`)
-
-Own accounts (email + werkzeug-hashed password, SQLite at `DATA_DIR/podsen_v2.db`),
-shows found via the Apple iTunes Search API, picks from public RSS. No Spotify login,
-no Spotify data. Routes: Blueprint in `v2/web.py`; HTML in `v2/app_views.py`.
-
-- **`v2/engine.py` `pick()` is the only place the method is chosen.** Currently
-  `newest_first`; swap it there once a later layer beats it on labeled backlogs.
-- Backlog = last `RECENT_DAYS` (30) of saved feeds, minus episodes marked heard.
-  Feeds cached 1 hour in SQLite. Undated episodes are left out.
-- Session: only `session["v2_user"]`, `session["v2_csrf"]` and `session.permanent` —
-  the cookie is shared with V1, so V2 code must never read other keys. `test_v2.py`
-  enforces this. V2 logins are permanent (30 days, `PERMANENT_SESSION_LIFETIME`); V1
-  never sets permanent. V1's `/logout` clears the whole session, so it logs out of V2 too.
-- Every V2 POST needs `csrf_token` (checked in `web.py`'s `before_request`, 400 if
-  missing or wrong). New POST forms must include `_csrf(csrf)`.
-- "Add show" takes only the iTunes id and re-looks up the feed URL from Apple, so a
-  form can't make the server fetch an arbitrary URL.
-- Login throttle (15 min): 5 failures per email *from one IP*, 20 per IP across all
-  emails. Per-IP keying is what stops one person locking out someone else.
-- `/v2/account` → "Delete my account" (password + same throttle) removes the user and
-  all their rows: shows, heard, runs, feedback, login failures.
-
-## V2 Phase 0 — evaluation setup (`v2/`)
-
-V2 is set selection under a time budget: which SET of backlog episodes fits the time
-I have and is worth it. It lives next to V1; nothing in V1 depends on it.
-
-**Data rule: V2 uses public RSS + hand labels only.** Spotify's developer policy bars
-feeding Spotify data into AI/ML. Nothing under `v2/` may import `spotify.py`, `app.py`
-or read Spotify fields; label files reject non-RSS episode fields. `test_v2.py` enforces
-this with an AST scan — don't weaken it to make something pass.
-
-| File | Role |
-|---|---|
-| `v2/rss.py` | RSS → episodes (stdlib). Durations round UP: V2's budget is a hard cap |
-| `v2/dataset.py` | label file format, validation, save under `DATA_DIR/labels/` |
-| `v2/baselines.py` | `newest_first`, `random_fill`, `v1_llm`; `select(backlog, budget, intent)` |
-| `v2/metrics.py` | pick_hit_rate, regret_rate, budget_used, duplicate_catch_rate, bootstrap |
-| `v2/report.py` | `python -m v2.report [--dir DIR]` — table + CIs over backlogs |
-| `v2/label_views.py` | HTML for `/label` (routes are in `app.py`, no Spotify login) |
-| `v2/sample_data/` | 3 **FAKE** backlogs so the report runs without real labels |
-
-```bash
-flask --app app run --port 3000   # then open http://127.0.0.1:3000/label
-python -m v2.report               # every file in data/labels/
-python -m v2.report --dir v2/sample_data
-```
-
-- Budget is a hard cap for every method (V1's 10% tolerance does not apply); the
-  `v1_llm` wrapper drops over-budget picks and the report counts them.
-- With no API key, `v1_llm` shows `SKIPPED, no API key`; a call error shows `FAILED`.
-- Under 5 backlogs, the report never calls a difference, whatever the intervals say.
-- `/label` is locked to this machine (127.0.0.1 / ::1 with no proxy headers) or
-  `?key=ADMIN_KEY`. cloudflared connects from 127.0.0.1, so loopback alone is NOT
-  enough — the forwarding-header check is what keeps tunnel visitors out. Feed
-  fetches are limited to public http(s) addresses, 30 MB, 20 s.
+- Label backlogs at `/label`; files land in `data/labels/`. `python -m v2.report`
+  compares methods with 95% bootstrap CIs over backlogs.
+- Under 5 backlogs the report never calls a difference, whatever the intervals say.
+- `v1_llm` needs `GROQ_API_KEY` (or Claude); without it the row says
+  `SKIPPED, no API key`; a call error shows `FAILED`. Its over-budget picks are dropped
+  by the hard cap and counted.
 - `groups_touched` sits beside `duplicate_catch_rate`: picking nothing from a group
   counts as "caught", so read the two together.
-- Later phases: a new method must beat the best earlier one by a meaningful margin
-  or it is cut; simpler wins ties. If V2 can't clearly beat `newest_first`, say so.
+- `/label` is locked to this machine (127.0.0.1 / ::1 with no proxy headers) or
+  `?key=ADMIN_KEY`. cloudflared connects from 127.0.0.1, so loopback alone is NOT
+  enough — the forwarding-header check keeps tunnel visitors out.
+
+## Hosting
+
+Run locally and share with `cloudflared tunnel --url http://127.0.0.1:3000`. Set
+`SESSION_SECRET` and `ADMIN_KEY` first. `Dockerfile` / `fly.toml` / `render.yaml` are
+kept but untested since the V2 move; all data is one SQLite file, so one instance only.
+Gunicorn needs `--timeout 300`: a first run fetches every saved feed while the user waits.
+
+## Known weak spots
+
+- `rank.py`'s `claude` backend has never run against the live API, only stubs.
+- The Amazon Music search link was only partly verified (the route exists; results
+  rendering needs a real browser check).
+- Apple's episode lookup returns a show's newest 200 episodes; older picks fall back to
+  "Search on Apple Podcasts".
+- There is no real labeled data yet. Feedback so far is the builder's own.

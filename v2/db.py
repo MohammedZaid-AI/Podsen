@@ -304,6 +304,23 @@ def latest_feedback(run_id: str):
     return row["verdict"] if row else None
 
 
+def all_runs() -> list[dict]:
+    """Every run for /admin: what was picked, for whom (user id only), and any failures."""
+    with connect() as c:
+        rows = c.execute("SELECT * FROM runs ORDER BY ts").fetchall()
+    out = []
+    for r in rows:
+        p = json.loads(r["payload"])
+        out.append({
+            "id": r["id"], "user_id": r["user_id"], "ts": r["ts"], "budget": r["budget"],
+            "engine": r["engine"], "backlog_size": p.get("backlog_size"),
+            "picks": [{k: x.get(k) for k in ("id", "title", "show", "duration_min")}
+                      for x in p.get("picks", [])],
+            "skips": len(p.get("skips", [])), "failed": p.get("failed", []),
+        })
+    return out
+
+
 def all_feedback() -> list[dict]:
     with connect() as c:
         return [dict(r) for r in c.execute("SELECT * FROM feedback ORDER BY id").fetchall()]
