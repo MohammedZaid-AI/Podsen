@@ -600,9 +600,10 @@ FORBIDDEN_SUBSTRINGS = ("spotify:", "open." + _SPOTIFY_COM, *SPOTIFY_API_HOSTS)
 # The one Spotify string V2 may contain: a link-out search URL built from public RSS
 # text. Nothing is fetched from it and no Spotify data comes back.
 ALLOWED_LINKS = {"https://open.spotify.com/search/"}
-# The V2 app has its own login in the shared Flask cookie, under these keys only:
-# the user's id and the CSRF token. It may also mark the cookie permanent (30 days).
-V2_SESSION_KEYS = {"v2_user", "v2_csrf"}
+# The app keeps its login in the Flask cookie under these keys only: the user's id,
+# the CSRF token and the PKCE verifier (between /login and the auth callback). It may
+# also mark the cookie permanent (30 days).
+V2_SESSION_KEYS = {"v2_user", "v2_csrf", "v2_pkce"}
 
 
 def _violations(tree, where):

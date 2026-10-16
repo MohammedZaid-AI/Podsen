@@ -3,3 +3,5 @@ requests>=2.32
 anthropic>=1.0
 gunicorn>=23.0
 python-dotenv>=1.0
+sqlalchemy>=2.0
+psycopg[binary]>=3.2

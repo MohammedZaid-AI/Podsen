@@ -1,7 +1,7 @@
 # Podsen
 
-Podcast triage. Users make an account, add the shows they follow (found through
-Apple's free iTunes search), and say how much time they have right now. Podsen reads
+Podcast triage. Users sign in with Google (Supabase Auth), add the shows they follow
+(found through Apple's free iTunes search), and say how much time they have right now. Podsen reads
 each show's public RSS feed and picks the set of recent episodes that fits that time,
 lists what's safe to skip, and gives play links for each pick: an in-page audio
 player, Spotify search, Apple Podcasts (exact episode when it can be matched),
@@ -17,9 +17,10 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py -q   # 176 tests
+python -m pytest test_rank.py test_v2.py test_v2_app.py -q   # 193 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
+python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
 ```
 
 `/` redirects to the app at `/v2/`. `/label` (hand-label backlogs for evaluation) and
@@ -38,7 +39,10 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `rank.py` | the only LLM call; Groq (default) or Claude behind one `rank()` |
 | `v2/web.py` | the app's routes (Blueprint under `/v2`): accounts, shows, today, runs |
 | `v2/app_views.py` | the app's HTML builders, play/search links |
-| `v2/db.py` | SQLite at `DATA_DIR/podsen_v2.db`: users, shows, heard, runs, feedback, caches |
+| `v2/auth.py` | Google sign-in via Supabase Auth (PKCE, server side) + admin user delete |
+| `v2/db.py` | SQLAlchemy Core: Postgres via `DATABASE_URL`, else SQLite `DATA_DIR/podsen_v2.db` |
+| `v2/supabase_setup.sql` | tables + RLS for Supabase; run once in the SQL editor |
+| `v2/migrate_sqlite.py` | one-off copy of the old email+password SQLite data into Postgres |
 | `v2/itunes.py` | Apple iTunes search/lookup, incl. a show's episode list |
 | `v2/rss.py` | RSS → episodes (stdlib). Durations round UP: the budget is a hard cap |
 | `v2/backlog.py` | a user's backlog: last 30 days of their feeds, minus heard; feed cache |
@@ -49,6 +53,7 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `v2/metrics.py`, `v2/report.py` | evaluation metrics, bootstrap CIs, `python -m v2.report` |
 | `v2/label_views.py` | HTML for `/label` |
 | `v2/sample_data/` | 3 **FAKE** labeled backlogs so the report runs without real labels |
+| `conftest.py` | test safety net: no test can reach the real Supabase (see below) |
 
 ## Lessons that cost real time — keep them
 
@@ -83,17 +88,36 @@ are labelled as searches.
 - No mock data in the product flow. Test doubles are fine; the FAKE samples are for
   the report only and are marked FAKE in their names and contents.
 - `data/` and `.env` are gitignored — real user data and labels must never be committed.
+- **Secrets:** never print `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` or
+  `DATABASE_URL`. The service-role key is used in one place (`auth.delete_auth_user`),
+  only in a request header; a test checks every response and log line for it. The
+  500 page shows only the error type, never the message (DB errors carry hostnames).
+- **Tests never touch real services.** `conftest.py` sets `PODSEN_SKIP_DOTENV=1` before
+  anything is imported (so `.env` is never loaded in tests), removes `DATABASE_URL`
+  (SQLite in a temp dir) and points Supabase at fakes on a `.invalid` domain.
 
 ## How the app works
 
-- **Accounts:** email + werkzeug-hashed password. Logins last 30 days (permanent
-  session, `PERMANENT_SESSION_LIFETIME`). Session keys: only `v2_user`, `v2_csrf`.
+- **Sign-in:** "Continue with Google" only, via Supabase Auth's PKCE flow, no client
+  JS. `/v2/login` makes a code_verifier (kept in the session as `v2_pkce`, single use)
+  and redirects to `{SUPABASE_URL}/auth/v1/authorize?provider=google&...&code_challenge`.
+  `/v2/auth/callback?code=` exchanges it at `/auth/v1/token?grant_type=pkce` with the
+  anon key. The callback URL is built from the request host; Supabase only redirects to
+  URLs on its allow-list. Errors (cancelled, used/expired code, missing or wrong
+  verifier, Supabase down) each get a plain message and a retry button.
+- **Session:** `v2_user` = the Supabase user id; logins last 30 days (permanent
+  session, `PERMANENT_SESSION_LIFETIME`). Session keys: only `v2_user`, `v2_csrf`,
+  `v2_pkce` (`test_v2.py` enforces this).
 - **CSRF:** every `/v2` POST needs `csrf_token` (checked in `web.py` `before_request`,
   400 otherwise). New POST forms must include `_csrf(csrf)`.
-- **Login throttle (15 min):** 5 failures per email *from one IP*, 20 per IP overall.
-  Per-IP keying stops one person locking out someone else.
-- **Delete my account** (`/v2/account`, password + same throttle) removes the user and
-  every row of theirs.
+- **Delete my account** (`/v2/account`, type DELETE) removes every row of the user's,
+  then the Supabase auth user via the admin API. If that last call fails the page says
+  so: our data is gone, the sign-in record is not.
+- **Database:** SQLAlchemy Core, one code path for Postgres (production, Supabase) and
+  SQLite (tests, local fallback). Tables are created on first use; on Postgres the app
+  also enables RLS on every table every time, so a table it creates is never readable
+  through Supabase's API. The old password-era SQLite file is refused with a clear
+  message (copy it with `v2.migrate_sqlite`, then rename it).
 - **Add show** takes only the iTunes id and re-looks up the feed URL from Apple, so a
   form can't make the server fetch an arbitrary URL. Shows with no public feed are
   shown as "No public feed, can not be analyzed".
@@ -118,11 +142,27 @@ nothing clearly beats `newest_first`, say so.
   `?key=ADMIN_KEY`. cloudflared connects from 127.0.0.1, so loopback alone is NOT
   enough — the forwarding-header check keeps tunnel visitors out.
 
+## Supabase setup (once)
+
+1. Supabase dashboard → SQL Editor → run `v2/supabase_setup.sql` (tables + RLS).
+2. Authentication → Providers → enable **Google** with a Google OAuth client
+   (Google Cloud console; its redirect URI is the one Supabase shows on that page).
+3. Authentication → URL Configuration → add every callback to **Redirect URLs**:
+   `http://127.0.0.1:3000/v2/auth/callback` and any tunnel/hosted
+   `https://<host>/v2/auth/callback`.
+4. Put `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` and
+   `DATABASE_URL` in `.env`.
+5. To keep old local data: sign in with Google once, then
+   `python -m v2.migrate_sqlite --dry-run`, then without `--dry-run`, then rename
+   `data/podsen_v2.db` (e.g. to `podsen_v2.old.db`).
+
 ## Hosting
 
-Run locally and share with `cloudflared tunnel --url http://127.0.0.1:3000`. Set
-`SESSION_SECRET` and `ADMIN_KEY` first. `Dockerfile` / `fly.toml` / `render.yaml` are
-kept but untested since the V2 move; all data is one SQLite file, so one instance only.
+Run locally and share with `cloudflared tunnel --url http://127.0.0.1:3000` (add the
+tunnel's callback URL to Supabase's Redirect URLs). Set `SESSION_SECRET` and
+`ADMIN_KEY` first. `Dockerfile` / `fly.toml` / `render.yaml` are
+kept but untested since the V2 move; with `DATABASE_URL` on Postgres there is no local
+state left besides `/label` drafts and label files under `DATA_DIR`.
 Gunicorn needs `--timeout 300`: a first run fetches every saved feed while the user waits.
 
 ## Known weak spots

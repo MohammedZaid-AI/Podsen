@@ -66,35 +66,23 @@ def _error(msg):
 
 # --- landing + auth --------------------------------------------------------------------
 
+GOOGLE_BUTTON = '<a class="btn" href="/v2/login">Continue with Google</a>'
+
+
 def landing() -> str:
-    return """<p class="standfirst">Your backlog isn't a debt.</p>
+    return f"""<p class="standfirst">Your backlog isn't a debt.</p>
 <p>Add the podcasts you follow, say how much time you have, and Podsen picks what fits
 &mdash; and tells you what's safe to skip.</p>
 <p class="meta">Works with any show that has a public feed. No streaming account needed.</p>
-<p class="row" style="margin-top:24px"><a class="btn" href="/v2/signup">Sign up</a>
-<a class="btn secondary" href="/v2/login" style="background:#2a2c31;color:#e9e9ec">Log in</a></p>"""
+<p style="margin-top:24px">{GOOGLE_BUTTON}</p>"""
 
 
-def auth_form(mode: str, email: str = "", error: str | None = None, csrf: str = "") -> str:
-    signup = mode == "signup"
-    title = "Create your account" if signup else "Log in"
-    other = (
-        '<p class="meta">Already have an account? <a href="/v2/login">Log in</a></p>'
-        if signup
-        else '<p class="meta">New here? <a href="/v2/signup">Sign up</a></p>'
-    )
-    hint = '<span class="meta">At least 8 characters.</span>' if signup else ""
-    return f"""<h2>{title}</h2>
-{_error(error)}
-<form method="post" action="/v2/{mode}">{_csrf(csrf)}
-  <label class="field"><span>Email</span>
-    <input type="email" name="email" required maxlength="254" value="{esc(email)}" autocomplete="email"></label>
-  <label class="field"><span>Password</span>
-    <input type="password" name="password" required minlength="{8 if signup else 1}"
-      autocomplete="{'new-password' if signup else 'current-password'}">{hint}</label>
-  <button>{'Sign up' if signup else 'Log in'}</button>
-</form>
-{other}"""
+def login_error(message: str) -> str:
+    """A sign-in step failed: say what happened and offer a clean retry."""
+    return f"""<h2>Sign in</h2>
+{_error(message)}
+<p style="margin-top:20px">{GOOGLE_BUTTON}</p>
+<p class="meta" style="margin-top:16px"><a href="/v2/">Back to Podsen</a></p>"""
 
 
 # --- shows -------------------------------------------------------------------------------
@@ -299,22 +287,23 @@ def privacy() -> str:
     return """<h2>Privacy</h2>
 <p>What Podsen stores about you, and nothing else:</p>
 <ul>
-  <li><strong>Your email</strong>, to log you in.</li>
-  <li><strong>Your password, hashed.</strong> We never store or see the password itself.</li>
+  <li><strong>Your email address, from Google.</strong> You sign in with Google; we
+      receive your email and an account id, never your Google password.</li>
   <li><strong>The shows you chose</strong> (name and public feed address).</li>
   <li><strong>Episodes you marked as heard</strong>, so they stop being suggested.</li>
   <li><strong>Each set of picks we showed you and your feedback on it</strong>
       (yes / somewhat / no, the time you had, and which episodes were picked),
       to measure whether the picks are any good.</li>
-  <li><strong>Failed log-in attempts</strong> (email and time), kept for 15 minutes to
-      slow down password guessing.</li>
 </ul>
+<p><strong>Where it is stored:</strong> with <a href="https://supabase.com" target="_blank"
+rel="noopener">Supabase</a>, which runs our sign-in and database. Supabase keeps the
+sign-in record (your email and Google account id); everything else is in our
+database there.</p>
 <p>Episode information comes from each show's public feed and is cached for an hour.
 We do not connect to your streaming accounts.</p>
 <p><strong>You can delete everything.</strong> On your <a href="/v2/account">Account</a>
-page, &ldquo;Delete my account&rdquo; asks for your password and then immediately and
-permanently removes your account and everything above: your email, password hash, shows,
-heard episodes, picks and feedback.</p>
+page, &ldquo;Delete my account&rdquo; asks you to type DELETE and then immediately and
+permanently removes everything above, including your sign-in record at Supabase.</p>
 <p><strong>We never sell your data.</strong> It is not shared with advertisers or
 anyone else.</p>
 <p><a href="/v2/">Back</a></p>"""
@@ -324,21 +313,28 @@ anyone else.</p>
 
 def account_page(email: str, error: str | None = None, csrf: str = "") -> str:
     return f"""<h2>Account</h2>
-<p>Logged in as <strong>{esc(email)}</strong>. You stay logged in on this browser for
-30 days unless you log out.</p>
+<p>Signed in with Google as <strong>{esc(email)}</strong>. You stay signed in on this
+browser for 30 days unless you log out.</p>
 <form method="post" action="/v2/logout">{_csrf(csrf)}<button class="secondary">Log out</button></form>
 <h2>Delete my account</h2>
 <p>This permanently deletes your account and all its data: your shows, heard episodes,
-picks and feedback. It cannot be undone.</p>
+picks, feedback and your sign-in record. It cannot be undone.</p>
 {_error(error)}
 <form method="post" action="/v2/account/delete">{_csrf(csrf)}
-  <label class="field"><span>Your password, to confirm</span>
-    <input type="password" name="password" required autocomplete="current-password"></label>
+  <label class="field"><span>Type DELETE to confirm</span>
+    <input type="text" name="confirm" required autocomplete="off" spellcheck="false"></label>
   <button class="danger">Delete my account</button>
 </form>"""
 
 
-def account_deleted() -> str:
+def account_deleted(login_error: str | None = None) -> str:
+    """`login_error`: our data is gone but the sign-in record could not be removed."""
+    if login_error:
+        return f"""<h2>Account data deleted</h2>
+<p>Your shows, heard episodes, picks and feedback have been deleted.</p>
+<p class="warn">{esc(login_error)} Only your email and Google account id are left
+there. Sign in again and delete once more to finish, or ask us to remove it.</p>
+<p style="margin-top:20px"><a class="btn" href="/v2/">Back to Podsen</a></p>"""
     return """<h2>Account deleted</h2>
-<p>Your account and all its data have been deleted.</p>
+<p>Your account and all its data have been deleted, including your sign-in record.</p>
 <p style="margin-top:20px"><a class="btn" href="/v2/">Back to Podsen</a></p>"""

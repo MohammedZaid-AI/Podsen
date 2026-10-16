@@ -2,7 +2,7 @@
 
 **Listen to what's worth it.**
 
-Triage for your podcast backlog. Make an account, add the shows you follow, and tell
+Triage for your podcast backlog. Sign in with Google, add the shows you follow, and tell
 Podsen how much time you have right now. It reads each show's public feed and picks
 the recent episodes that fit that time, lists what's safe to skip, and gives you a
 way to play each pick: right in the page, or via Spotify, Apple Podcasts, YouTube or
@@ -17,12 +17,36 @@ public RSS feed; no streaming account is needed.
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1        # source .venv/bin/activate elsewhere
 pip install -r requirements.txt
-copy .env.example .env              # set SESSION_SECRET and ADMIN_KEY
+copy .env.example .env              # fill in the values (see Supabase setup below)
 flask --app app run --port 3000     # `flask run` is what reads .env
 ```
 
-Open http://127.0.0.1:3000 — it goes straight to the app at `/v2/`. Sign up, add 3 or
-more shows, pick a time.
+Open http://127.0.0.1:3000 — it goes straight to the app at `/v2/`. Continue with
+Google, add 3 or more shows, pick a time.
+
+## Supabase setup (once)
+
+Podsen uses [Supabase](https://supabase.com) for Google sign-in and its Postgres
+database.
+
+1. **Create the tables.** Dashboard → SQL Editor → paste `v2/supabase_setup.sql` →
+   Run. It also turns on Row Level Security for every table, with no policies, so the
+   public anon key can't read anything through Supabase's API. Our server connects to
+   the database directly, so it isn't affected.
+2. **Turn on Google.** Authentication → Providers → Google: paste a Google OAuth client
+   id and secret (Google Cloud console → APIs & Services → Credentials). Give that
+   Google client the redirect URI Supabase shows on the same page.
+3. **Allow our callback.** Authentication → URL Configuration → Redirect URLs: add
+   `http://127.0.0.1:3000/v2/auth/callback`, plus `https://<your-tunnel-or-host>/v2/auth/callback`
+   for anywhere else you run it.
+4. **Fill in `.env`:** `SUPABASE_URL` and `SUPABASE_ANON_KEY` (Project Settings → API),
+   `SUPABASE_SERVICE_ROLE_KEY` (same page; secret, server only) and `DATABASE_URL`
+   (Connect → connection string, with your database password). Without `DATABASE_URL`
+   the app uses a local SQLite file instead.
+5. **Bringing old local data across** (from the email+password version): sign in with
+   Google once, then run `python -m v2.migrate_sqlite --dry-run` to see what would be
+   copied, then `python -m v2.migrate_sqlite`. Accounts are matched by email. Afterwards
+   rename `data/podsen_v2.db` (for example to `podsen_v2.old.db`).
 
 To share with testers, run it on your machine and put a tunnel in front:
 
@@ -30,14 +54,17 @@ To share with testers, run it on your machine and put a tunnel in front:
 cloudflared tunnel --url http://127.0.0.1:3000
 ```
 
-Cloudflared prints an `https://<random>.trycloudflare.com` URL to send out. The link
-only works while your machine is on and the app is running.
+Cloudflared prints an `https://<random>.trycloudflare.com` URL to send out. Add
+`https://<that-host>/v2/auth/callback` to Supabase's Redirect URLs (step 3 above) or
+Google sign-in will refuse it. The link only works while your machine is on and the
+app is running.
 
 ## How it works
 
 | Step | How |
 |---|---|
-| Accounts | email + password (hashed with werkzeug), stored in SQLite at `data/podsen_v2.db` |
+| Accounts | "Continue with Google" through Supabase Auth (PKCE, server side, no client JS); we get your email |
+| Storage | Supabase Postgres (`DATABASE_URL`), or a local SQLite file when that isn't set |
 | Find shows | Apple's free iTunes Search API. Shows with no public feed are marked "No public feed, can not be analyzed" |
 | Backlog | episodes from the last 30 days of each saved feed, minus ones you marked heard |
 | Picks | `v2/engine.py` `pick()`, currently newest-first, filling the time budget. The budget is a hard cap, enforced in code |
@@ -45,9 +72,10 @@ only works while your machine is on and the app is running.
 | Feedback | "Was this worth your time?" yes / somewhat / no, saved with the picks |
 
 A show whose feed fails to load is named on the results page — picks from a partial
-backlog never look complete. Logins last 30 days; every form is CSRF-protected; failed
-logins are throttled per email and IP. Users can delete their account and all its data
-from the Account page. See `/v2/privacy` for what is stored.
+backlog never look complete. Logins last 30 days; every form is CSRF-protected.
+Users can delete their account and all its data from the Account page by typing
+DELETE; that also removes their sign-in record at Supabase. See `/v2/privacy` for
+what is stored.
 
 Python + **Flask**, server-rendered HTML, no build step and no client JS.
 
@@ -67,8 +95,8 @@ The `v1_llm` method ranks with an LLM through `rank.py` and needs `GROQ_API_KEY`
 
 ## Operator pages
 
-- `/admin?key=YOUR-ADMIN-KEY` — every run and feedback answer as JSON (no emails or
-  password hashes).
+- `/admin?key=YOUR-ADMIN-KEY` — every run and feedback answer as JSON (user ids
+  only, no emails).
 - `/label` — see above.
 
 ## Tests
@@ -81,8 +109,10 @@ python -m pytest test_rank.py test_v2.py test_v2_app.py -q
 `test_rank.py` covers the LLM ranking layer (budget filter, JSON repair and retry,
 Groq and Claude call handling). `test_v2.py` covers the RSS loader, label files,
 pick methods, metrics, the report, `/label`, and the data rule. `test_v2_app.py`
-covers the app: accounts, CSRF, throttling, shows, picks, links, feedback, deletion
-and `/admin`. Apple and every feed are stubbed — no network needed.
+covers the app: Google sign-in (PKCE, error cases), CSRF, shows, picks, links,
+feedback, deletion, the database layer, the data copy script and `/admin`. Supabase,
+Apple and every feed are stubbed, and `conftest.py` makes sure no test can reach the
+real Supabase project or load the real `.env` — no network needed.
 
 ## Data rule
 
@@ -94,6 +124,6 @@ imports a `spotify` module or a Spotify API URL appears anywhere in the repo.
 ## Deploying
 
 `Dockerfile`, `fly.toml` and `render.yaml` are kept but untested since the move to the
-current app. All data is one SQLite file, so run a single instance with a persistent
-disk, and give gunicorn `--timeout 300` (a first run fetches every feed while the user
-waits).
+current app. Set the four Supabase values as secrets, add the host's callback URL to
+Supabase's Redirect URLs, and give gunicorn `--timeout 300` (a first run fetches every
+feed while the user waits).

@@ -17,7 +17,8 @@ import requests
 try:
     from dotenv import load_dotenv
     from pathlib import Path
-    load_dotenv(Path(__file__).resolve().parent / ".env")
+    if not os.environ.get("PODSEN_SKIP_DOTENV"):  # set by conftest.py for tests
+        load_dotenv(Path(__file__).resolve().parent / ".env")
 except ImportError:
     pass
 

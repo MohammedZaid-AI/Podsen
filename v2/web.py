@@ -1,35 +1,25 @@
-"""The V2 product flow under /v2: own accounts, shows from Apple search, picks from
-public RSS. No streaming-service login and no Spotify data anywhere in this flow.
+"""The V2 product flow under /v2: Google sign-in (Supabase Auth), shows from Apple
+search, picks from public RSS. No Spotify data anywhere in this flow.
 
-Our Flask session keys: "v2_user" (the user's id) and "v2_csrf" (the form token).
-V1's keys in the same cookie are never read or written here.
+Our Flask session keys: "v2_user" (the Supabase user id), "v2_csrf" (the form token)
+and "v2_pkce" (the PKCE code_verifier, only between /login and /auth/callback).
 """
 
 import hmac
 import re
 import secrets
-import time
 from functools import wraps
 
-from flask import Blueprint, redirect, request, session
-from werkzeug.security import check_password_hash, generate_password_hash
+from flask import Blueprint, current_app, redirect, request, session
 
-from v2 import app_views, backlog, db, engine, itunes, links
+from v2 import app_views, auth, backlog, db, engine, itunes, links
 
 bp = Blueprint("v2", __name__, url_prefix="/v2")
 
-# Failed logins, counted in a 15-minute window. Per email AND IP, so guessing at
-# someone's account from one machine never locks them out on theirs; and per IP
-# overall, so one machine can't spray guesses across many accounts.
-MAX_FAILURES = 5
-MAX_IP_FAILURES = 20
-FAILURE_WINDOW_S = 15 * 60
 VERDICTS = ("yes", "somewhat", "no")
 RUN_FIELDS = (
     "id", "title", "show", "duration_min", "released", "audio_url", "apple_url", "apple_episode_url",
 )
-# Compared against when the email is unknown, so a miss costs the same as a wrong password.
-_DUMMY_HASH = generate_password_hash("not-a-real-password")
 
 
 # --- session, CSRF ---------------------------------------------------------------------
@@ -57,7 +47,7 @@ def _check_csrf():
     return app_views.page("Podsen", body), 400
 
 
-def _log_in(user_id: int) -> None:
+def _log_in(user_id: str) -> None:
     session["v2_user"] = user_id
     session.permanent = True  # 30 days: PERMANENT_SESSION_LIFETIME in app.py
     session["v2_csrf"] = secrets.token_urlsafe(32)  # fresh token for the new login
@@ -66,6 +56,7 @@ def _log_in(user_id: int) -> None:
 def _log_out() -> None:
     session.pop("v2_user", None)
     session.pop("v2_csrf", None)
+    session.pop("v2_pkce", None)
     session.permanent = False
 
 
@@ -80,7 +71,7 @@ def login_required(view):
         user = _current_user()
         if user is None:
             session.pop("v2_user", None)
-            return redirect("/v2/login")
+            return redirect("/v2/")
         return view(user, *args, **kwargs)
 
     return wrapper
@@ -90,42 +81,14 @@ def _page(title, body, status=200, logged_in=False):
     return app_views.page(title, body, logged_in=logged_in, csrf=_csrf_token()), status
 
 
-def _norm_email(raw) -> str:
-    return (raw or "").strip().lower()[:254]
+def _callback_url() -> str:
+    # From the request host (ProxyFix applies X-Forwarded-Host behind a tunnel), so the
+    # same code works on 127.0.0.1 and when hosted. Supabase only redirects to URLs on
+    # its allow-list, so a forged Host header can't send the code anywhere else.
+    return f"{request.url_root.rstrip('/')}/v2/auth/callback"
 
 
-def _ip() -> str:
-    # ProxyFix in app.py has already replaced this with the client behind a tunnel.
-    return request.remote_addr or ""
-
-
-def _locked_out(email: str, ip: str) -> int | None:
-    """Minutes until this email+IP may try again, or None if it may try now."""
-    pair, by_ip = db.recent_failures(email, ip, FAILURE_WINDOW_S)
-    # For each limit hit, the failure whose ageing-out brings the count under the cap.
-    blocking = [lst[len(lst) - cap] for lst, cap in ((pair, MAX_FAILURES), (by_ip, MAX_IP_FAILURES))
-                if len(lst) >= cap]
-    if not blocking:
-        return None
-    return max(1, round((max(blocking) + FAILURE_WINDOW_S - time.time()) / 60))
-
-
-def _password_ok(email: str, password: str):
-    """(user or None, locked_minutes or None). Records a failure on a wrong password."""
-    ip = _ip()
-    wait = _locked_out(email, ip)
-    if wait:
-        return None, wait
-    user = db.get_user_by_email(email)
-    ok = check_password_hash(user["password_hash"] if user else _DUMMY_HASH, password)
-    if not (user and ok):
-        db.record_failure(email, ip)
-        return None, None
-    db.clear_failures(email, ip)
-    return user, None
-
-
-# --- landing, auth -----------------------------------------------------------------------
+# --- landing, Google sign-in -------------------------------------------------------------
 
 @bp.get("")
 @bp.get("/")
@@ -135,41 +98,49 @@ def landing():
     return app_views.page("Podsen", app_views.landing(), hero=True)
 
 
-@bp.route("/signup", methods=["GET", "POST"])
-def signup():
-    if request.method == "GET":
-        return _page("Podsen · sign up", app_views.auth_form("signup", csrf=_csrf_token()))
-    email = _norm_email(request.form.get("email"))
-    password = request.form.get("password") or ""
-    error = None
-    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-        error = "Enter a valid email address."
-    elif len(password) < 8:
-        error = "Password must be at least 8 characters."
-    elif len(password) > 1000:
-        error = "Password is too long."
-    if error is None:
-        uid = db.create_user(email, generate_password_hash(password))
-        if uid is None:
-            error = "An account with this email already exists. Log in instead."
-    if error:
-        return _page("Podsen · sign up", app_views.auth_form("signup", email, error, _csrf_token()), 400)
-    _log_in(uid)
-    return redirect("/v2/shows")
-
-
-@bp.route("/login", methods=["GET", "POST"])
+@bp.get("/login")
 def login():
-    if request.method == "GET":
-        return _page("Podsen · log in", app_views.auth_form("login", csrf=_csrf_token()))
-    email = _norm_email(request.form.get("email"))
-    user, wait = _password_ok(email, request.form.get("password") or "")
-    if wait:
-        msg = f"Too many failed attempts. Try again in about {wait} minute(s)."
-        return _page("Podsen · log in", app_views.auth_form("login", email, msg, _csrf_token()), 429)
-    if user is None:
-        msg = "Wrong email or password."
-        return _page("Podsen · log in", app_views.auth_form("login", email, msg, _csrf_token()), 401)
+    if _current_user():
+        return redirect("/v2/today")
+    verifier = auth.new_verifier()
+    try:
+        url = auth.authorize_url(_callback_url(), verifier)
+    except auth.AuthError as e:
+        return _page("Podsen · sign in", app_views.login_error(str(e)), 503)
+    session["v2_pkce"] = verifier
+    return redirect(url)
+
+
+@bp.get("/auth/callback")
+def auth_callback():
+    # The verifier is single use, whatever happens next.
+    verifier = session.pop("v2_pkce", None)
+
+    error = request.args.get("error")
+    if error:
+        if error == "access_denied":
+            msg = "You cancelled signing in with Google. Nothing was changed."
+        else:
+            detail = request.args.get("error_description") or error
+            msg = f"Google sign-in failed: {detail[:200]}"
+        return _page("Podsen · sign in", app_views.login_error(msg), 400)
+
+    code = request.args.get("code")
+    if not code:
+        return _page("Podsen · sign in",
+                     app_views.login_error("No sign-in code came back. Please start again."), 400)
+    if not verifier:
+        return _page("Podsen · sign in", app_views.login_error(
+            "This sign-in was started in another browser or took too long. Please start again."), 400)
+
+    try:
+        user = auth.exchange_code(code, verifier)
+    except auth.AuthError as e:
+        status = 503 if e.kind in ("unreachable", "not_configured") else 400
+        current_app.logger.warning("sign-in failed: %s", e.kind)  # the kind only, never a key
+        return _page("Podsen · sign in", app_views.login_error(str(e)), status)
+
+    db.upsert_user(user["id"], user["email"])
     _log_in(user["id"])
     return redirect("/v2/today")
 
@@ -196,15 +167,20 @@ def account(user):
 @bp.post("/account/delete")
 @login_required
 def account_delete(user):
-    # Same throttle as login: a stolen session must not be a way to guess the password.
-    checked, wait = _password_ok(user["email"], request.form.get("password") or "")
-    if wait or checked is None:
-        msg = (f"Too many failed attempts. Try again in about {wait} minute(s)." if wait
-               else "That password is not right. Your account was not deleted.")
-        body = app_views.account_page(user["email"], msg, _csrf_token())
-        return _page("Podsen · account", body, 429 if wait else 401, logged_in=True)
+    if (request.form.get("confirm") or "").strip() != "DELETE":
+        body = app_views.account_page(
+            user["email"], "Type DELETE in capitals to confirm. Nothing was deleted.", _csrf_token()
+        )
+        return _page("Podsen · account", body, 400, logged_in=True)
+
     db.delete_user(user["id"])
     _log_out()
+    try:
+        auth.delete_auth_user(user["id"])
+    except auth.AuthError as e:
+        # Our data is already gone; say plainly that the sign-in record is not.
+        current_app.logger.warning("auth user delete failed: %s", e.kind)
+        return _page("Podsen", app_views.account_deleted(str(e)), 502)
     return _page("Podsen", app_views.account_deleted())
 
 

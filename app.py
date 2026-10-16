@@ -13,6 +13,14 @@ from datetime import date, timedelta
 from urllib.parse import urlencode
 
 from flask import Flask, redirect, request
+
+try:  # read .env here too, not only via rank.py: DATABASE_URL and SUPABASE_* live there
+    from dotenv import load_dotenv
+
+    if not os.environ.get("PODSEN_SKIP_DOTENV"):  # set by conftest.py for tests
+        load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -208,11 +216,14 @@ def on_error(err):
     # Let 404/405/etc. keep their own status; only real faults become the 500 page.
     if isinstance(err, HTTPException):
         return err
+    # Full details go to the server log only. The page names the error type and no
+    # more: a database or HTTP error message can carry hostnames or connection details.
     app.logger.exception(err)
     return (
         views.page(
             "Podsen",
-            f"<p>Something broke:</p><pre>{views.esc(err)}</pre><p><a href='/v2/'>Back</a></p>",
+            f"<p>Something broke ({views.esc(type(err).__name__)}). It has been logged.</p>"
+            "<p><a href='/v2/'>Back</a></p>",
         ),
         500,
     )
