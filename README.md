@@ -65,7 +65,7 @@ app is running.
 |---|---|
 | Accounts | "Continue with Google" through Supabase Auth (PKCE, server side, no client JS); we get your email |
 | Storage | Supabase Postgres (`DATABASE_URL`), or a local SQLite file when that isn't set |
-| Find shows | Apple's free iTunes Search API. Shows with no public feed are marked "No public feed, can not be analyzed" |
+| Find shows | Apple's free iTunes Search API, plus a "Trending" list (Apple's top-25 chart for India, US or UK) where you tick several shows and add them in one step. Shows with no public feed are marked "No public feed, can not be analyzed" |
 | Backlog | episodes from the last 30 days of each saved feed, minus ones you marked heard |
 | Picks | `v2/engine.py` `pick()`, currently newest-first, filling the time budget. The budget is a hard cap, enforced in code |
 | Play | an in-page audio player from the feed, plus Spotify search, Apple Podcasts (the exact episode when it can be matched, otherwise a search), YouTube search, Amazon Music search |

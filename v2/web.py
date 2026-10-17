@@ -12,7 +12,7 @@ from functools import wraps
 
 from flask import Blueprint, current_app, redirect, request, session
 
-from v2 import app_views, auth, backlog, db, engine, itunes, links
+from v2 import app_views, auth, backlog, db, engine, itunes, links, trending
 
 bp = Blueprint("v2", __name__, url_prefix="/v2")
 
@@ -186,6 +186,51 @@ def account_delete(user):
 
 # --- shows -------------------------------------------------------------------------------
 
+MAX_ADD = 25  # one trending chart's worth per request
+
+
+def _note_from_args():
+    def num(k):
+        v = request.args.get(k, "")
+        return min(int(v), 99) if v.isdigit() else 0
+    return app_views.added_note(num("added"), num("skipped"))
+
+
+def _shows_page(user, query="", results=None, error=None, status=200, note=None):
+    body = app_views.shows_page(
+        db.list_shows(user["id"]), query, results, error, _csrf_token(),
+        trending=trending.get(request.args.get("country") or request.form.get("country")),
+        note=note,
+    )
+    return _page("Podsen · shows", body, status, logged_in=True)
+
+
+def _today_page(user, error=None, status=200, note=None):
+    shows_list = db.list_shows(user["id"])
+    n = len(shows_list)
+    trend = None
+    if n < app_views.MIN_SHOWS:  # only a new user needs suggestions here
+        trend = trending.get(request.args.get("country") or request.form.get("country"))
+    body = app_views.today_form(n, error, _csrf_token(), trending=trend,
+                                have={s["itunes_id"] for s in shows_list}, note=note)
+    return _page("Podsen · today", body, status, logged_in=True)
+
+
+def _add_shows(user, ids) -> tuple[int, int]:
+    """The one add path: the form sends only iTunes ids; every feed URL comes from
+    Apple's lookup, never from the form. Returns (added, skipped_no_feed)."""
+    found = itunes.lookup_many(ids)
+    added = skipped = 0
+    for itunes_id in dict.fromkeys(ids):
+        show = found.get(itunes_id)
+        if show and show["feed_url"]:
+            db.add_show(user["id"], show)
+            added += 1
+        else:
+            skipped += 1
+    return added, skipped
+
+
 @bp.get("/shows")
 @login_required
 def shows(user):
@@ -196,8 +241,7 @@ def shows(user):
             results = itunes.search(query)
         except Exception as e:  # say the search failed rather than showing "no results"
             error = f"Search failed ({type(e).__name__}). Try again in a moment."
-    body = app_views.shows_page(db.list_shows(user["id"]), query, results, error, _csrf_token())
-    return _page("Podsen · shows", body, logged_in=True)
+    return _shows_page(user, query, results, error, note=_note_from_args())
 
 
 @bp.post("/shows/add")
@@ -205,20 +249,32 @@ def shows(user):
 def shows_add(user):
     itunes_id = (request.form.get("itunes_id") or "").strip()
     try:
-        show = itunes.lookup(itunes_id)
+        added, _ = _add_shows(user, [itunes_id])
     except Exception as e:
-        body = app_views.shows_page(
-            db.list_shows(user["id"]), error=f"Could not add that show ({type(e).__name__}).",
-            csrf=_csrf_token(),
-        )
-        return _page("Podsen · shows", body, 502, logged_in=True)
-    if show is None or not show["feed_url"]:
-        body = app_views.shows_page(
-            db.list_shows(user["id"]), error="No public feed, can not be analyzed.", csrf=_csrf_token()
-        )
-        return _page("Podsen · shows", body, 400, logged_in=True)
-    db.add_show(user["id"], show)
+        return _shows_page(user, error=f"Could not add that show ({type(e).__name__}).", status=502)
+    if not added:
+        return _shows_page(user, error="No public feed, can not be analyzed.", status=400)
     return redirect("/v2/shows")
+
+
+@bp.post("/shows/add-many")
+@login_required
+def shows_add_many(user):
+    """"Add selected" from a trending list: several shows in one normal form POST."""
+    back = "today" if request.form.get("back") == "today" else "shows"
+    code = trending.country(request.form.get("country"))
+    ids = [i.strip() for i in request.form.getlist("itunes_id") if i.strip().isdigit()][:MAX_ADD]
+    render = _today_page if back == "today" else _shows_page
+    if not ids:
+        return render(user, error="Tick at least one show to add.", status=400)
+    try:
+        added, skipped = _add_shows(user, ids)
+    except Exception as e:
+        return render(user, error=f"Could not add those shows ({type(e).__name__}). Try again.", status=502)
+
+    if len(db.list_shows(user["id"])) >= app_views.MIN_SHOWS:
+        return redirect(f"/v2/today?added={added}&skipped={skipped}")
+    return redirect(f"/v2/{back}?added={added}&skipped={skipped}&country={code}")
 
 
 @bp.post("/shows/remove")
@@ -233,8 +289,7 @@ def shows_remove(user):
 @bp.get("/today")
 @login_required
 def today(user):
-    n = len(db.list_shows(user["id"]))
-    return _page("Podsen · today", app_views.today_form(n, csrf=_csrf_token()), logged_in=True)
+    return _today_page(user, note=_note_from_args())
 
 
 def _minutes() -> int | None:
@@ -251,15 +306,11 @@ def _minutes() -> int | None:
 @bp.post("/today")
 @login_required
 def today_run(user):
-    n = len(db.list_shows(user["id"]))
-    if n < app_views.MIN_SHOWS:
-        return _page("Podsen · today", app_views.today_form(n, csrf=_csrf_token()), 400, logged_in=True)
+    if len(db.list_shows(user["id"])) < app_views.MIN_SHOWS:
+        return _today_page(user, status=400)
     minutes = _minutes()
     if minutes is None:
-        body = app_views.today_form(
-            n, "Time must be a whole number of minutes from 1 to 600.", _csrf_token()
-        )
-        return _page("Podsen · today", body, 400, logged_in=True)
+        return _today_page(user, error="Time must be a whole number of minutes from 1 to 600.", status=400)
 
     bl = backlog.build(user["id"])
     picks, skips = engine.pick(bl["episodes"], minutes)

@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
-from urllib.parse import parse_qs, quote, quote_plus, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, unquote, urlparse
 
 import pytest
 import requests
@@ -39,6 +39,21 @@ CATALOG = {
     "104": {"name": "Fourth Show", "feed": "https://feeds.example/d"},
     "105": {"name": "Exclusive Show", "feed": None},  # platform exclusive: no public feed
 }
+
+
+def chart_item(cid, name=None, genres=("Podcasts", "News"), artwork=None, url=None):
+    """One entry of Apple's top-podcasts chart (rss.marketingtools.apple.com)."""
+    return {
+        "id": cid,
+        "name": name or CATALOG[cid]["name"],
+        "artistName": "Artist " + cid,
+        "artworkUrl100": artwork or f"https://img.example/top/{cid}.jpg",
+        "url": url or f"https://podcasts.apple.com/in/podcast/id{cid}",
+        "genres": [{"genreId": str(i), "name": g, "url": "https://x"} for i, g in enumerate(genres)],
+    }
+
+
+TOP_CHART = [chart_item("101"), chart_item("102", genres=("Comedy",)), chart_item("104"), chart_item("105")]
 
 
 def _itunes_item(cid):
@@ -96,17 +111,28 @@ def net(monkeypatch):
     """Stub iTunes + feeds. `net["fail"]` is a set of feed URLs that will error;
     `net["apple"]` maps a show id to its Apple episode list; `net["episode_lookups"]`
     records each per-show episode lookup."""
-    state = {"fail": set(), "fetches": [], "apple": {}, "episode_lookups": [], "apple_down": False}
+    state = {"fail": set(), "fetches": [], "apple": {}, "episode_lookups": [], "apple_down": False,
+             "top": {"in": TOP_CHART, "us": [chart_item("103")], "gb": [chart_item("102")]},
+             "top_calls": [], "top_down": False, "lookup_down": False}
 
     def fake_itunes(url):
+        if url.startswith("https://rss.marketingtools.apple.com/api/v2/"):
+            country = url.split("/api/v2/")[1].split("/")[0]
+            state["top_calls"].append(country)
+            if state["top_down"]:
+                raise TimeoutError("apple chart timed out")
+            return {"feed": {"title": "Top Shows", "results": state["top"].get(country, [])}}
         if "/lookup?" in url:
-            cid = url.split("id=")[1].split("&")[0]
+            ids = unquote(url.split("id=")[1].split("&")[0]).split(",")
             if "entity=podcastEpisode" in url:
+                cid = ids[0]
                 state["episode_lookups"].append(cid)
                 if state["apple_down"]:
                     raise TimeoutError("apple timed out")
                 return {"results": [_itunes_item(cid)] + state["apple"].get(cid, [])}
-            return {"results": [_itunes_item(cid)] if cid in CATALOG else []}
+            if state["lookup_down"]:
+                raise TimeoutError("lookup timed out")
+            return {"results": [_itunes_item(cid) for cid in ids if cid in CATALOG]}
         return {"results": [_itunes_item(cid) for cid in CATALOG]}
 
     def fake_fetch(url):
@@ -436,8 +462,191 @@ def test_three_shows_are_required(client):
     login(client)
     add(client, "101", "102")
     assert "Add at least 3 shows" in client.get("/v2/shows").get_data(as_text=True)
-    assert "You need at least 3 shows" in client.get("/v2/today").get_data(as_text=True)
+    today = client.get("/v2/today").get_data(as_text=True)
+    assert "Pick at least 3 shows" in today and "you have 2." in " ".join(today.split())
     assert client.post("/v2/today", data={"minutes": "30"}).status_code == 400
+
+
+# --- trending suggestions -----------------------------------------------------------------
+
+def _trending_form(html):
+    """The "Add selected" form's HTML, or "" if the page has none."""
+    if 'action="/v2/shows/add-many"' not in html:
+        return ""
+    return html.split('action="/v2/shows/add-many"')[1].split("</form>")[0]
+
+
+def test_suggestions_render_on_today_for_a_new_user(client):
+    login(client)
+    html = client.get("/v2/today").get_data(as_text=True)
+    assert "Trending in India" in html
+    form = _trending_form(html)
+    for cid in ("101", "102", "104"):
+        assert f'type="checkbox" name="itunes_id" value="{cid}"' in form, cid
+    assert esc(TRICKY_SHOW) in form and "<Show>" not in form, "names are escaped"
+    assert "Artist 102" in form and "Comedy" in form
+    assert "Artist 101 &middot; News" in form, "first real genre, not the umbrella 'Podcasts'"
+    assert 'src="https://img.example/top/101.jpg"' in form
+    assert f'name="csrf_token" value="{client.token()}"' in form and "Add selected" in form
+    assert 'href="/v2/shows"' in html, "the Add shows button for search is still there"
+    assert 'href="/v2/today?country=us"' in html and 'href="/v2/today?country=gb"' in html
+
+
+def test_today_hides_suggestions_once_there_are_three_shows(client):
+    login(client)
+    add(client, "101", "102", "103")
+    html = client.get("/v2/today").get_data(as_text=True)
+    assert "Trending in" not in html and "How much time do you have" in html
+
+
+def test_my_shows_has_a_trending_section_under_the_search_box(client):
+    login(client)
+    html = client.get("/v2/shows").get_data(as_text=True)
+    assert html.index('action="/v2/shows"') < html.index("<h2>Trending</h2>") < html.index("My shows (")
+    assert 'href="/v2/shows?country=us"' in html
+    assert 'value="101"' in _trending_form(html)
+
+
+def test_already_added_shows_are_hidden(client):
+    login(client)
+    add(client, "102")
+    for page in ("/v2/today", "/v2/shows"):
+        form = _trending_form(client.get(page).get_data(as_text=True))
+        assert 'value="101"' in form and 'value="102"' not in form, page
+
+
+def test_a_show_with_no_public_feed_has_no_checkbox(client):
+    login(client)
+    html = client.get("/v2/today").get_data(as_text=True)
+    form = _trending_form(html)
+    exclusive = form.split("Exclusive Show")[1].split('class="show"')[0]
+    assert "No public feed, can not be analyzed" in exclusive
+    assert 'value="105"' not in form
+
+
+def test_add_selected_adds_several_shows_and_goes_to_today(client):
+    uid = login(client)
+    r = client.post("/v2/shows/add-many",
+                    data={"itunes_id": ["101", "102", "104"], "back": "today", "country": "in"})
+    assert r.status_code == 302 and r.headers["Location"].startswith("/v2/today?added=3")
+    assert sorted(s["itunes_id"] for s in db.list_shows(uid)) == ["101", "102", "104"]
+    assert {s["feed_url"] for s in db.list_shows(uid)} == {
+        "https://feeds.example/a", "https://feeds.example/b", "https://feeds.example/d"}
+    html = client.get(r.headers["Location"]).get_data(as_text=True)
+    assert "Added 3 shows." in html and "How much time do you have" in html
+
+
+def test_add_selected_below_three_stays_and_says_what_happened(client):
+    uid = login(client)
+    r = client.post("/v2/shows/add-many",
+                    data={"itunes_id": ["101", "105"], "back": "shows", "country": "us"})
+    loc = r.headers["Location"]
+    assert r.status_code == 302 and loc.startswith("/v2/shows?") and "country=us" in loc
+    assert [s["itunes_id"] for s in db.list_shows(uid)] == ["101"], "the no-feed show is not added"
+    html = client.get(loc).get_data(as_text=True)
+    assert "Added 1 show." in html and "1 had no public feed" in html
+
+
+def test_add_selected_needs_csrf_and_a_ticked_show(client):
+    uid = login(client)
+    data = {"itunes_id": ["101", "102", "104"], "back": "today"}
+    assert client.post("/v2/shows/add-many", data=data, csrf=False).status_code == 400
+    assert client.post("/v2/shows/add-many", data={**data, "csrf_token": "forged"},
+                       csrf=False).status_code == 400
+    assert db.list_shows(uid) == []
+    r = client.post("/v2/shows/add-many", data={"back": "today"})
+    assert r.status_code == 400 and "Tick at least one show" in r.get_data(as_text=True)
+
+
+def test_add_selected_ignores_anything_but_itunes_ids(client):
+    uid = login(client)
+    client.post("/v2/shows/add-many",
+                data={"itunes_id": ["101", "x;drop", "../../etc"], "feed_url": "http://127.0.0.1/",
+                      "back": "elsewhere"})
+    assert [(s["itunes_id"], s["feed_url"]) for s in db.list_shows(uid)] == [("101", "https://feeds.example/a")]
+
+
+@pytest.mark.parametrize("raw", ["fr", "IN; drop", "", "../us", "usa"])
+def test_bad_country_code_falls_back_to_india(client, net, raw):
+    login(client)
+    html = client.get(f"/v2/today?country={quote(raw)}").get_data(as_text=True)
+    assert "Trending in India" in html
+    assert net["top_calls"] == ["in"]
+
+
+def test_country_switch_shows_that_countrys_chart(client, net):
+    login(client)
+    html = client.get("/v2/today?country=us").get_data(as_text=True)
+    assert "Trending in US" in html and 'value="103"' in _trending_form(html)
+    html = client.get("/v2/today?country=GB").get_data(as_text=True)
+    assert "Trending in UK" in html
+    assert net["top_calls"] == ["us", "gb"]
+
+
+def test_trending_failure_shows_a_message_and_search_still_works(client, net):
+    login(client)
+    net["top_down"] = True
+    for page in ("/v2/today", "/v2/shows"):
+        r = client.get(page)
+        assert r.status_code == 200
+        assert "Could not load trending shows right now." in r.get_data(as_text=True)
+    html = client.get("/v2/shows?q=second").get_data(as_text=True)
+    assert "Could not load trending shows" in html and 'name="itunes_id" value="102"' in html
+
+
+def test_feed_check_failure_counts_as_a_trending_failure(client, net):
+    login(client)
+    net["lookup_down"] = True
+    html = client.get("/v2/today").get_data(as_text=True)
+    assert "Could not load trending shows right now." in html and _trending_form(html) == ""
+
+
+def test_trending_is_cached_for_12_hours_per_country(client, net, monkeypatch):
+    from v2 import trending
+
+    login(client)
+    client.get("/v2/today")
+    client.get("/v2/shows")
+    client.get("/v2/today")
+    assert net["top_calls"] == ["in"], "second and third views use the cache"
+    client.get("/v2/today?country=us")
+    assert net["top_calls"] == ["in", "us"], "each country is cached separately"
+
+    later = db.time.time() + trending.CACHE_SECONDS + 1
+    monkeypatch.setattr(db.time, "time", lambda: later)
+    client.get("/v2/today")
+    assert net["top_calls"] == ["in", "us", "in"]
+
+
+def test_a_failed_load_is_not_cached(client, net):
+    login(client)
+    net["top_down"] = True
+    client.get("/v2/today")
+    net["top_down"] = False
+    html = client.get("/v2/today").get_data(as_text=True)
+    assert "Trending in India" in html and 'value="101"' in _trending_form(html)
+
+
+@pytest.mark.parametrize("genres,expected", [
+    ([{"genreId": "26", "name": "Podcasts"}, {"genreId": "1489", "name": "News"}], "News"),
+    (["Podcasts", "Comedy"], "Comedy"),          # plain strings also work
+    ([{"genreId": "26", "name": "Podcasts"}], "Podcasts"),
+    ([], ""), (None, ""), ([{"genreId": "1"}, 7], ""),
+])
+def test_first_genre_handles_both_shapes(genres, expected):
+    assert itunes._first_genre(genres) == expected
+
+
+def test_only_https_artwork_and_page_urls_are_used(client, net):
+    net["top"]["in"] = [
+        chart_item("101", artwork="http://img.example/plain.jpg", url="javascript:alert(1)"),
+        chart_item("102", name='<img src=x onerror="alert(1)">'),
+    ]
+    login(client)
+    form = _trending_form(client.get("/v2/today").get_data(as_text=True))
+    assert "http://img.example" not in form and "javascript:" not in form
+    assert "<img src=x" not in form and "&lt;img src=x" in form
+    assert '<img alt="">' in form, "an unsafe cover is replaced by an empty one"
 
 
 # --- today -------------------------------------------------------------------------------

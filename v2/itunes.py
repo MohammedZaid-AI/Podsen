@@ -64,12 +64,58 @@ def episodes(itunes_id: str, get_json=None) -> list[dict]:
 
 def lookup(itunes_id: str, get_json=None) -> dict | None:
     """Re-fetch one show by id, so the feed URL we store comes from Apple, not the form."""
-    if not str(itunes_id).isdigit():
-        return None
+    return lookup_many([itunes_id], get_json).get(str(itunes_id))
+
+
+def lookup_many(ids, get_json=None) -> dict[str, dict]:
+    """Look up several shows in one call: {itunes_id: show}. Ids Apple doesn't know are
+    simply absent. Non-numeric ids are dropped before anything is sent."""
+    wanted = list(dict.fromkeys(str(i).strip() for i in ids if str(i).strip().isdigit()))
     get_json = get_json or _get_json
-    results = get_json(f"{LOOKUP_URL}?{urlencode({'id': itunes_id, 'entity': 'podcast'})}").get("results") or []
-    for r in results:
-        s = normalize(r)
-        if s and s["itunes_id"] == str(itunes_id):
-            return s
-    return None
+    out = {}
+    for start in range(0, len(wanted), 50):
+        chunk = wanted[start:start + 50]
+        query = urlencode({"id": ",".join(chunk), "entity": "podcast"}, safe=",")
+        for r in get_json(f"{LOOKUP_URL}?{query}").get("results") or []:
+            s = normalize(r)
+            if s and s["itunes_id"] in chunk:
+                out[s["itunes_id"]] = s
+    return out
+
+
+# --- trending: Apple's top podcasts chart ----------------------------------------------
+
+TOP_URL = "https://rss.marketingtools.apple.com/api/v2/{country}/podcasts/top/25/podcasts.json"
+
+
+def _first_genre(genres) -> str:
+    # Objects ({"genreId", "name"}) per the chart's documented shape; plain strings too,
+    # so a format change costs the genre label at worst, never the page.
+    names = [g.get("name") if isinstance(g, dict) else g for g in genres or []]
+    names = [n for n in names if isinstance(n, str) and n]
+    specific = [n for n in names if n != "Podcasts"]  # the umbrella genre says nothing
+    return (specific or names or [""])[0]
+
+
+def top_shows(country: str, get_json=None) -> list[dict]:
+    """Apple's top 25 podcasts for a country, each with its public feed checked.
+
+    The chart has no feedUrl, so one batched lookup fills it in: a show whose
+    feed_url is None has no public feed and can't be added.
+    """
+    get_json = get_json or _get_json
+    items = (get_json(TOP_URL.format(country=country)).get("feed") or {}).get("results") or []
+    chart = [i for i in items if str(i.get("id", "")).isdigit() and i.get("name")]
+    feeds = lookup_many([i["id"] for i in chart], get_json)
+    return [
+        {
+            "itunes_id": str(i["id"]),
+            "name": i["name"],
+            "artist": i.get("artistName") or "",
+            "genre": _first_genre(i.get("genres")),
+            "artwork_url": _https(i.get("artworkUrl100")),
+            "apple_url": _https(i.get("url")),
+            "feed_url": (feeds.get(str(i["id"])) or {}).get("feed_url"),
+        }
+        for i in chart
+    ]

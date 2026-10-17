@@ -56,6 +56,12 @@ apple_episodes_cache = Table(
     Column("fetched", Float, nullable=False),
     Column("payload", Text, nullable=False),
 )
+trending_cache = Table(
+    "trending_cache", metadata,
+    Column("country", String, primary_key=True),
+    Column("fetched", Float, nullable=False),
+    Column("payload", Text, nullable=False),
+)
 runs = Table(
     "runs", metadata,
     Column("id", String, primary_key=True),
@@ -276,6 +282,17 @@ def store_apple_episodes(itunes_id: str, episodes: list[dict]) -> None:
         _upsert(c, apple_episodes_cache, {"itunes_id": itunes_id, "fetched": time.time(),
                                           "payload": json.dumps(episodes, ensure_ascii=False)},
                 ["itunes_id"])
+
+
+def cached_trending(country: str, max_age_s: float):
+    return _cached(trending_cache, trending_cache.c.country, country, max_age_s)
+
+
+def store_trending(country: str, shows_list: list[dict]) -> None:
+    with engine().begin() as c:
+        _upsert(c, trending_cache, {"country": country, "fetched": time.time(),
+                                    "payload": json.dumps(shows_list, ensure_ascii=False)},
+                ["country"])
 
 
 # --- runs + feedback ---------------------------------------------------------------------

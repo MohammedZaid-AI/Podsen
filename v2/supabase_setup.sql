@@ -10,7 +10,6 @@
 --
 -- Generated from the table definitions in v2/db.py; keep the two in step.
 
-
 CREATE TABLE IF NOT EXISTS apple_episodes_cache (
 	itunes_id VARCHAR NOT NULL, 
 	fetched FLOAT NOT NULL, 
@@ -23,6 +22,13 @@ CREATE TABLE IF NOT EXISTS feed_cache (
 	fetched FLOAT NOT NULL, 
 	payload TEXT NOT NULL, 
 	PRIMARY KEY (feed_url)
+);
+
+CREATE TABLE IF NOT EXISTS trending_cache (
+	country VARCHAR NOT NULL, 
+	fetched FLOAT NOT NULL, 
+	payload TEXT NOT NULL, 
+	PRIMARY KEY (country)
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -89,6 +95,8 @@ CREATE INDEX IF NOT EXISTS ix_feedback_run_id ON feedback (run_id);
 ALTER TABLE "apple_episodes_cache" ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE "feed_cache" ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE "trending_cache" ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE "users" ENABLE ROW LEVEL SECURITY;
 

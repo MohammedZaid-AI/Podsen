@@ -17,7 +17,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py -q   # 193 tests, no network
+python -m pytest test_rank.py test_v2.py test_v2_app.py -q   # 219 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
@@ -43,7 +43,8 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `v2/db.py` | SQLAlchemy Core: Postgres via `DATABASE_URL`, else SQLite `DATA_DIR/podsen_v2.db` |
 | `v2/supabase_setup.sql` | tables + RLS for Supabase; run once in the SQL editor |
 | `v2/migrate_sqlite.py` | one-off copy of the old email+password SQLite data into Postgres |
-| `v2/itunes.py` | Apple iTunes search/lookup, incl. a show's episode list |
+| `v2/itunes.py` | Apple iTunes search/lookup (batched), a show's episode list, top chart |
+| `v2/trending.py` | trending shows per country (in/us/gb), Apple's chart cached 12 h |
 | `v2/rss.py` | RSS → episodes (stdlib). Durations round UP: the budget is a hard cap |
 | `v2/backlog.py` | a user's backlog: last 30 days of their feeds, minus heard; feed cache |
 | `v2/engine.py` | `pick()` — the ONE place the pick method is chosen (now `newest_first`) |
@@ -121,8 +122,16 @@ are labelled as searches.
 - **Add show** takes only the iTunes id and re-looks up the feed URL from Apple, so a
   form can't make the server fetch an arbitrary URL. Shows with no public feed are
   shown as "No public feed, can not be analyzed".
+- **Trending:** Apple's top-25 chart per country (`?country=in|us|gb`, anything else
+  falls back to India), cached 12 h in `trending_cache`. The chart has no feedUrl, so
+  one batched lookup marks shows with no public feed (listed, no checkbox). Shown on
+  Today while the user has fewer than 3 shows, and on My shows. "Add selected" posts
+  only iTunes ids to `/v2/shows/add-many`; at 3+ shows it lands on Today. A failed
+  load says "Could not load trending shows right now" and is never cached.
+- **One add path:** `_add_shows()` in `web.py` (single Add and Add selected) looks up
+  every feed URL from Apple; the form's own values are never stored.
 - **Backlog:** last `RECENT_DAYS` (30) of saved feeds minus heard; undated episodes
-  are left out. Feeds cached 1 h, Apple episode lists 6 h, both in SQLite.
+  are left out. Feeds cached 1 h, Apple episode lists 6 h, trending 12 h, all in the DB.
 
 ## Evaluation (Phase 0)
 

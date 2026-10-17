@@ -41,6 +41,11 @@ _STYLE = """<style>
   button.linkbtn { background: none; color: #6fd08c; padding: 0; border-radius: 0;
     font-weight: 400; text-decoration: underline; }
   .danger { background: #b3394a; color: #fff; }
+  label.show { cursor: pointer; margin: 0; }
+  label.show input[type=checkbox] { width: 18px; height: 18px; flex: none; }
+  .countries { display: flex; gap: 12px; font-size: 14px; margin: -4px 0 8px; }
+  .countries strong { color: #e9e9ec; }
+  .note { color: #6fd08c; margin: 8px 0 12px; }
 </style>"""
 
 
@@ -104,8 +109,60 @@ def _search_result(s: dict, have: set, csrf: str) -> str:
   {action}</div>"""
 
 
+def _note(msg):
+    return f'<p class="note">{esc(msg)}</p>' if msg else ""
+
+
+def added_note(added: int, skipped: int = 0) -> str | None:
+    parts = []
+    if added:
+        parts.append(f"Added {added} show{'s' if added != 1 else ''}.")
+    if skipped:
+        parts.append(f"{skipped} had no public feed, so {'it was' if skipped == 1 else 'they were'} not added.")
+    return " ".join(parts) or None
+
+
+def trending_section(trending: dict, have: set, csrf: str, back: str, heading: str) -> str:
+    """Trending shows as one checkbox form. Shows already added are left out; a show
+    with no public feed is listed without a checkbox."""
+    code = trending["country"]
+    switch = " ".join(
+        f"<strong>{esc(label)}</strong>" if c == code
+        else f'<a href="/v2/{back}?country={esc(c)}">{esc(label)}</a>'
+        for c, label in (("in", "India"), ("us", "US"), ("gb", "UK"))
+    )
+    head = f'<h2>{esc(heading)}</h2><div class="countries">{switch}</div>'
+    if trending.get("error"):
+        return f'{head}<p class="warn">{esc(trending["error"])} Search still works.</p>'
+
+    rows, addable = [], 0
+    for s in trending["shows"]:
+        if s["itunes_id"] in have:
+            continue
+        meta = " &middot; ".join(esc(x) for x in (s.get("artist"), s.get("genre")) if x)
+        text = (f'<div class="grow"><strong>{esc(s["name"])}</strong><br>'
+                f'<span class="meta">{meta}</span></div>')
+        if s.get("feed_url"):
+            addable += 1
+            rows.append(f"""<label class="show">
+  <input type="checkbox" name="itunes_id" value="{esc(s['itunes_id'])}">{_cover(s.get('artwork_url'))}{text}</label>""")
+        else:
+            rows.append(f"""<div class="show">{_cover(s.get('artwork_url'))}{text}
+  <span class="meta">No public feed, can not be analyzed</span></div>""")
+    if not rows:
+        return f'{head}<p class="meta">You have added every trending show here.</p>'
+    button = ('<p style="margin-top:14px"><button>Add selected</button></p>' if addable else "")
+    return f"""{head}
+<form method="post" action="/v2/shows/add-many">{_csrf(csrf)}
+  <input type="hidden" name="back" value="{esc(back)}">
+  <input type="hidden" name="country" value="{esc(code)}">
+  {"".join(rows)}
+  {button}
+</form>"""
+
+
 def shows_page(my_shows: list[dict], query: str = "", results=None, error: str | None = None,
-               csrf: str = "") -> str:
+               csrf: str = "", trending: dict | None = None, note: str | None = None) -> str:
     have = {s["itunes_id"] for s in my_shows}
     n = len(my_shows)
     if n < MIN_SHOWS:
@@ -130,13 +187,16 @@ def shows_page(my_shows: list[dict], query: str = "", results=None, error: str |
         for s in my_shows
     ) or '<p class="meta">No shows yet. Search above to add some.</p>'
 
-    return f"""<h2>Find your shows</h2>
+    trend = trending_section(trending, have, csrf, "shows", "Trending") if trending else ""
+    return f"""{_note(note)}
+<h2>Find your shows</h2>
 <form method="get" action="/v2/shows" class="row" style="flex-wrap:nowrap">
   <input type="search" name="q" value="{esc(query)}" placeholder="Search podcasts" required maxlength="100">
   <button>Search</button>
 </form>
 {_error(error)}
 {found}
+{trend}
 <h2>My shows ({n})</h2>
 {need}
 {mine}"""
@@ -144,12 +204,18 @@ def shows_page(my_shows: list[dict], query: str = "", results=None, error: str |
 
 # --- today -------------------------------------------------------------------------------
 
-def today_form(n_shows: int, error: str | None = None, csrf: str = "") -> str:
+def today_form(n_shows: int, error: str | None = None, csrf: str = "",
+               trending: dict | None = None, have: set | None = None, note: str | None = None) -> str:
     if n_shows < MIN_SHOWS:
-        return f"""<p class="warn">You need at least {MIN_SHOWS} shows for Podsen to pick from
-&mdash; you have {n_shows}.</p>
-<p style="margin-top:20px"><a class="btn" href="/v2/shows">Add shows</a></p>"""
-    return f"""{_error(error)}
+        trend = (trending_section(trending, have or set(), csrf, "today",
+                                  f"Trending in {trending['label']}") if trending else "")
+        return f"""{_note(note)}{_error(error)}
+<p class="meta">Pick at least {MIN_SHOWS} shows you follow to get started &mdash; you have
+{esc(n_shows)}. Tick them below, or search for yours.</p>
+{trend}
+<p style="margin-top:20px"><a class="btn secondary" href="/v2/shows"
+  style="background:#2a2c31;color:#e9e9ec">Add shows</a></p>"""
+    return f"""{_note(note)}{_error(error)}
 <form method="post" action="/v2/today">{_csrf(csrf)}
   <h2>How much time do you have right now?</h2>
   <div class="row">
