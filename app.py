@@ -31,25 +31,77 @@ from v2 import label_views
 from v2 import rss as v2_rss
 from v2.web import bp as v2_bp
 
+# --- production settings ---------------------------------------------------------------
+
+DEV_SECRET = "dev-insecure-secret"
+# Values shipped in .env.example. Treated as "not set": copying the example into
+# production must never leave a guessable secret or admin key in place.
+PLACEHOLDERS = {"", DEV_SECRET, "change-this", "pick-a-long-random-string"}
+MIN_SECRET_CHARS = 32
+
+
+def is_production(env=os.environ) -> bool:
+    return (env.get("FLASK_ENV") or "").strip().lower() == "production"
+
+
+def production_problems(env=os.environ) -> list[str]:
+    """Everything that must be fixed before this can serve real users. Names only:
+    no value is ever included, so the message is safe to show in a deploy log."""
+    if not is_production(env):
+        return []
+    problems = []
+    secret = (env.get("SESSION_SECRET") or "").strip()
+    if secret in PLACEHOLDERS:
+        problems.append("SESSION_SECRET is missing or still the development default. "
+                        "Set it to a long random value (Render: Generate).")
+    elif len(secret) < MIN_SECRET_CHARS:
+        problems.append(f"SESSION_SECRET is too short; use at least {MIN_SECRET_CHARS} random characters.")
+    db_url = (env.get("DATABASE_URL") or "").strip()
+    if not db_url:
+        problems.append("DATABASE_URL is not set. Without it, users' data would go to a "
+                        "temporary file that is wiped on every deploy. Use Supabase's Session pooler string.")
+    elif not db_url.startswith(("postgres://", "postgresql://", "postgresql+psycopg://")):
+        problems.append("DATABASE_URL must be a Postgres connection string (Supabase Session pooler).")
+    for name in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"):
+        if not (env.get(name) or "").strip():
+            problems.append(f"{name} is not set; Google sign-in can't work without it.")
+    return problems
+
+
+_problems = production_problems()
+if _problems:
+    raise RuntimeError("Podsen refuses to start in production:\n  - " + "\n  - ".join(_problems))
+
 app = Flask(__name__)
-# Behind a tunnel or TLS-terminating host, trust one proxy hop: real client IP (used
-# by the login throttle) and https scheme.
+# Render (and a cloudflared tunnel) terminate HTTPS and forward plain HTTP with
+# X-Forwarded-Proto / X-Forwarded-For / Host. Trusting exactly one proxy hop makes
+# request.url_root "https://<public host>/", so the Google callback URL is right.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.config.update(
-    SECRET_KEY=os.environ.get("SESSION_SECRET", "dev-insecure-secret"),
+    SECRET_KEY=os.environ.get("SESSION_SECRET") or DEV_SECRET,
     SESSION_COOKIE_NAME="podsen",
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",  # cross-site POSTs don't carry the cookie
-    SESSION_COOKIE_SECURE=os.environ.get("FLASK_ENV") == "production",
+    SESSION_COOKIE_SECURE=is_production(),  # HTTPS-only cookie in production
+    PREFERRED_URL_SCHEME="https" if is_production() else "http",
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),  # V2 logins last 30 days
 )
 app.register_blueprint(v2_bp)
 
 
 def _admin_key_ok() -> bool:
-    key = os.environ.get("ADMIN_KEY")
+    key = (os.environ.get("ADMIN_KEY") or "").strip()
     given = request.args.get("key") or ""
-    return bool(key) and hmac.compare_digest(given.encode(), key.encode())
+    if key in PLACEHOLDERS:  # unset, or the example value: the key path is off
+        return False
+    return hmac.compare_digest(given.encode(), key.encode())
+
+
+@app.get("/health")
+def health():
+    """For Render's health check. Touches nothing (no database, no session), so a
+    database outage can't make Render restart a healthy app in a loop."""
+    return app.response_class("ok", mimetype="text/plain")
 
 
 @app.get("/")

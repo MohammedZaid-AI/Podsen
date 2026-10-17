@@ -17,7 +17,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py -q   # 219 tests, no network
+python -m pytest test_rank.py test_v2.py test_v2_app.py test_production.py -q   # 247 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
@@ -165,14 +165,30 @@ nothing clearly beats `newest_first`, say so.
    `python -m v2.migrate_sqlite --dry-run`, then without `--dry-run`, then rename
    `data/podsen_v2.db` (e.g. to `podsen_v2.old.db`).
 
-## Hosting
+## Hosting (Render + Supabase)
 
-Run locally and share with `cloudflared tunnel --url http://127.0.0.1:3000` (add the
-tunnel's callback URL to Supabase's Redirect URLs). Set `SESSION_SECRET` and
-`ADMIN_KEY` first. `Dockerfile` / `fly.toml` / `render.yaml` are
-kept but untested since the V2 move; with `DATABASE_URL` on Postgres there is no local
-state left besides `/label` drafts and label files under `DATA_DIR`.
-Gunicorn needs `--timeout 300`: a first run fetches every saved feed while the user waits.
+`render.yaml` = one Docker web service from `Dockerfile` (gunicorn, 2 workers,
+`--timeout 300`, non-root, no access log so `?key=` never reaches logs), health check
+`/health` (touches nothing). No disk: data is in Supabase. README "Deploy on Render"
+lists every env var.
+
+- **Startup checks:** with `FLASK_ENV=production`, `app.production_problems()` makes
+  the app refuse to start if `SESSION_SECRET` is missing/placeholder/<32 chars, or
+  `DATABASE_URL` (Postgres) or any `SUPABASE_*` value is missing. Names only, never
+  values. A new required setting goes there AND in `render.yaml`
+  (`test_production.py` checks every env var the code reads is listed).
+- **Cookies** are `Secure` (HTTPS only) in production; `HttpOnly`, `SameSite=Lax` always.
+- **`DATABASE_URL` on Render must be the Session pooler** (`*.pooler.supabase.com:5432`);
+  the direct `db.<ref>.supabase.co` host is IPv6-only. Pool: 2 + 3 overflow per worker.
+- **ProxyFix** trusts one hop, so `request.url_root` is the public https URL and the
+  Google callback is right behind Render or a cloudflared tunnel.
+- **Placeholders** from `.env.example` count as unset (`app.PLACEHOLDERS`): an
+  `ADMIN_KEY` left at the example value disables `/admin` rather than exposing it.
+
+**Mobile:** most users are on phones. Every page was measured at 375px in headless
+Chromium: no sideways scroll, tap targets >= 44px (`min-height: 44px`), artwork 48px,
+the audio player fits. Keep secondary text under a name, not beside it — a side-by-side
+note squeezes a show name into a few letters per line.
 
 ## Known weak spots
 

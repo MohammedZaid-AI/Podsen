@@ -134,6 +134,10 @@ def engine():
     if url.startswith("postgresql"):
         # Supabase's transaction pooler (port 6543) can't hold prepared statements.
         kwargs["connect_args"] = {"prepare_threshold": None}
+        # Supabase's Session pooler caps connections per project (15 on the smallest
+        # plan). 2 gunicorn workers x (2 + 3) = 10 at most, leaving room for the
+        # dashboard and scripts. Recycle before the pooler drops idle connections.
+        kwargs.update(pool_size=2, max_overflow=3, pool_recycle=300)
     eng = create_engine(url, **kwargs)
     ensure_schema(eng)
     _engine, _engine_url = eng, url

@@ -1,30 +1,46 @@
-# Render Blueprint. Free plan works but /data resets on each deploy;
-# the Starter plan keeps the disk (accounts, shows, feedback in podsen_v2.db).
+# Render Blueprint: one Docker web service. All data lives in Supabase (Postgres +
+# Google sign-in), so the service needs no disk.
 #
-# Untested since the move to the V2 app: running locally behind a cloudflared tunnel
-# (see README) is the verified setup. All V2 data is one SQLite file on the disk below,
-# so keep a single instance unless the database moves somewhere shared.
+# Secrets marked `sync: false` are asked for when you create the Blueprint: paste
+# them in the Render dashboard, never into this file. See README "Deploy on Render".
 services:
   - type: web
     name: podsen
-    runtime: python
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # "starter" stays awake. "free" works too but sleeps after 15 minutes idle, so the
+    # first visitor then waits ~1 minute for it to wake.
     plan: starter
-    buildCommand: pip install -r requirements.txt
-    # --timeout 300: a first "today" run fetches every saved feed while the user waits.
-    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT --timeout 300 app:app
+    healthCheckPath: /health
+    autoDeploy: false
     envVars:
+      # Turns on the production checks (refuse to start without the values below)
+      # and HTTPS-only cookies.
       - key: FLASK_ENV
         value: production
+      # Only /label drafts are written here; everything else is in Postgres.
       - key: DATA_DIR
-        value: /data
+        value: /tmp/podsen-data
+      # Signs the login cookie. Render generates a long random value.
       - key: SESSION_SECRET
         generateValue: true
+      # Unlocks /admin?key=... and /label?key=... . Render generates it.
       - key: ADMIN_KEY
         generateValue: true
-      # Only for the v1_llm evaluation baseline; the app runs without it.
+      # Supabase -> Project Settings -> API: Project URL, e.g. https://abcd.supabase.co
+      - key: SUPABASE_URL
+        sync: false
+      # Supabase -> Project Settings -> API: anon public key
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      # Supabase -> Project Settings -> API: service_role key (secret)
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # Supabase -> Connect -> Session pooler URI (port 5432, host *.pooler.supabase.com),
+      # with your database password. The direct db.<ref>.supabase.co host does NOT work
+      # from Render (it is IPv6-only).
+      - key: DATABASE_URL
+        sync: false
+      # Optional: only the v1_llm evaluation baseline uses it.
       - key: GROQ_API_KEY
         sync: false
-    disk:
-      name: podsen-data
-      mountPath: /data
-      sizeGB: 1

@@ -41,8 +41,11 @@ def page(title: str, body: str, hero: bool = False) -> str:
   }}
   * {{ box-sizing: border-box; }}
   body {{ margin: 0; background: #101114; color: #e9e9ec;
-    font: 16px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; }}
-  main {{ max-width: 640px; margin: 0 auto; padding: 32px 20px 80px; }}
+    font: 16px/1.5 -apple-system, Segoe UI, Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%; overflow-wrap: break-word; }}
+  /* Phones first: a 16px gutter, and nothing may be wider than the screen. */
+  main {{ max-width: 640px; margin: 0 auto; padding: 28px 16px 72px; }}
+  img, audio, video {{ max-width: 100%; }}
   /* Editorial display treatment: one sentence, two emphases. Same family and
      baseline throughout - only style, weight and colour change. */
   .wordmark {{ font-family: var(--display-serif); font-size: 19px; font-weight: 700;
@@ -62,8 +65,11 @@ def page(title: str, body: str, hero: bool = False) -> str:
   .meta {{ color: #9aa0a6; font-size: 14px; }}
   .skip {{ padding: 10px 0; border-bottom: 1px solid #23252a; }}
   .skip:last-child {{ border-bottom: 0; }}
+  /* 44px minimum height: Apple's smallest comfortable touch target. */
   button, .btn {{ font: inherit; background: #1db954; color: #06240f; border: 0;
-    border-radius: 999px; padding: 10px 18px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }}
+    border-radius: 999px; padding: 10px 20px; min-height: 44px; line-height: 24px;
+    font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block;
+    text-align: center; }}
   button.secondary {{ background: #2a2c31; color: #e9e9ec; }}
   input[type=number] {{ font: inherit; background: #16171b; color: #e9e9ec; border: 1px solid #2a2c31;
     border-radius: 8px; padding: 9px 12px; width: 90px; }}

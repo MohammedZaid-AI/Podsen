@@ -17,35 +17,49 @@ MIN_SHOWS = 3
 SKIPS_SHOWN = 10
 
 _STYLE = """<style>
-  .nav { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: -12px 0 22px; font-size: 15px; }
+  /* Phone-first: every control is at least 44px tall, nothing is wider than 375px. */
+  .nav { display: flex; gap: 4px 16px; align-items: center; flex-wrap: wrap; margin: -12px 0 18px; font-size: 15px; }
+  .nav a, .foot a, .countries a, .countries strong { display: inline-flex; align-items: center; min-height: 44px; }
   .nav form { margin: 0; }
-  .nav button { padding: 4px 12px; font-size: 14px; }
   .foot { margin-top: 48px; padding-top: 14px; border-top: 1px solid #23252a; font-size: 13px; color: #9aa0a6; }
   .show { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #23252a; }
   .show:last-child { border-bottom: 0; }
-  .show img { width: 56px; height: 56px; border-radius: 8px; flex: none; background: #23252a; }
-  .show .grow { flex: 1; min-width: 0; }
-  .show form { margin: 0; }
-  .links { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 14px; }
+  .show img { width: 56px; height: 56px; border-radius: 8px; flex: none; background: #23252a; object-fit: cover; }
+  .show .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .show form { margin: 0; flex: none; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; font-size: 14px; }
   .links form { margin: 0; display: inline; }
-  .links button { padding: 4px 12px; font-size: 14px; }
-  audio { width: 100%; margin-top: 10px; }
+  .links a, .links button { display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px;
+    border: 1px solid #2a2c31; border-radius: 999px; background: #16171b; color: #e9e9ec;
+    text-decoration: none; font-size: 14px; font-weight: 500; line-height: 1.2; }
+  details > summary { cursor: pointer; padding: 10px 0; min-height: 44px; line-height: 24px; }
+  audio { display: block; width: 100%; margin-top: 6px; }
   input[type=text], input[type=email], input[type=password], input[type=search] { font: inherit;
     background: #16171b; color: #e9e9ec; border: 1px solid #2a2c31; border-radius: 8px;
-    padding: 9px 12px; width: 100%; }
+    padding: 10px 12px; width: 100%; min-height: 44px; }
+  .row input[type=search] { flex: 1 1 auto; min-width: 0; width: auto; }
+  .row button { flex: none; }
   .field { margin: 0 0 14px; }
   .field > span { display: block; color: #9aa0a6; font-size: 14px; margin-bottom: 4px; }
   .err { border: 1px solid #6b2a33; background: #2a1418; color: #f1c4cb;
     border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 14px; }
   .ok { color: #6fd08c; }
-  button.linkbtn { background: none; color: #6fd08c; padding: 0; border-radius: 0;
+  button.linkbtn { background: none; color: #6fd08c; padding: 10px 0; border-radius: 0;
     font-weight: 400; text-decoration: underline; }
   .danger { background: #b3394a; color: #fff; }
-  label.show { cursor: pointer; margin: 0; }
-  label.show input[type=checkbox] { width: 18px; height: 18px; flex: none; }
-  .countries { display: flex; gap: 12px; font-size: 14px; margin: -4px 0 8px; }
+  label.show { cursor: pointer; margin: 0; min-height: 68px; }
+  label.show input[type=checkbox] { width: 24px; height: 24px; flex: none; margin: 0 2px; accent-color: #1db954; }
+  .countries { display: flex; gap: 0 18px; font-size: 15px; margin: -6px 0 4px; }
   .countries strong { color: #e9e9ec; }
   .note { color: #6fd08c; margin: 8px 0 12px; }
+  .nobox { width: 28px; flex: none; }
+  .nofeed { font-style: italic; }
+  .landing-cta { margin: 26px 0 14px; }
+  .landing-cta .btn { padding: 12px 26px; font-size: 17px; }
+  @media (max-width: 480px) {
+    .show img { width: 48px; height: 48px; }
+    .standfirst { font-size: 19px; }
+  }
 </style>"""
 
 
@@ -75,11 +89,11 @@ GOOGLE_BUTTON = '<a class="btn" href="/v2/login">Continue with Google</a>'
 
 
 def landing() -> str:
-    return f"""<p class="standfirst">Your backlog isn't a debt.</p>
-<p>Add the podcasts you follow, say how much time you have, and Podsen picks what fits
-&mdash; and tells you what's safe to skip.</p>
-<p class="meta">Works with any show that has a public feed. No streaming account needed.</p>
-<p style="margin-top:24px">{GOOGLE_BUTTON}</p>"""
+    # Three things only: what it does, the one button, where you can listen.
+    return f"""<p class="standfirst">Tell Podsen how much time you have, and it picks which
+episodes from your podcasts are worth it.</p>
+<p class="landing-cta">{GOOGLE_BUTTON}</p>
+<p class="meta">Works with Spotify, YouTube, Apple Podcasts and Amazon Music.</p>"""
 
 
 def login_error(message: str) -> str:
@@ -96,16 +110,22 @@ def _cover(url):
     return f'<img src="{esc(url)}" alt="" loading="lazy">' if url else '<img alt="">'
 
 
+NO_FEED = '<br><span class="meta nofeed">No public feed, can not be analyzed</span>'
+
+
 def _search_result(s: dict, have: set, csrf: str) -> str:
+    # The no-feed message goes under the name, not beside it: on a phone a side-by-side
+    # message squeezes the name into a column a few letters wide.
+    note, action = "", ""
     if not s.get("feed_url"):
-        action = '<span class="meta">No public feed, can not be analyzed</span>'
+        note = NO_FEED
     elif s["itunes_id"] in have:
         action = '<span class="meta ok">Added</span>'
     else:
         action = f"""<form method="post" action="/v2/shows/add">{_csrf(csrf)}
       <input type="hidden" name="itunes_id" value="{esc(s['itunes_id'])}"><button>Add</button></form>"""
     return f"""<div class="show">{_cover(s.get('artwork_url'))}
-  <div class="grow"><strong>{esc(s['name'])}</strong><br><span class="meta">{esc(s.get('artist'))}</span></div>
+  <div class="grow"><strong>{esc(s['name'])}</strong><br><span class="meta">{esc(s.get('artist'))}</span>{note}</div>
   {action}</div>"""
 
 
@@ -140,15 +160,15 @@ def trending_section(trending: dict, have: set, csrf: str, back: str, heading: s
         if s["itunes_id"] in have:
             continue
         meta = " &middot; ".join(esc(x) for x in (s.get("artist"), s.get("genre")) if x)
-        text = (f'<div class="grow"><strong>{esc(s["name"])}</strong><br>'
-                f'<span class="meta">{meta}</span></div>')
+        name = f'<strong>{esc(s["name"])}</strong><br><span class="meta">{meta}</span>'
         if s.get("feed_url"):
             addable += 1
             rows.append(f"""<label class="show">
-  <input type="checkbox" name="itunes_id" value="{esc(s['itunes_id'])}">{_cover(s.get('artwork_url'))}{text}</label>""")
+  <input type="checkbox" name="itunes_id" value="{esc(s['itunes_id'])}">{_cover(s.get('artwork_url'))}<div class="grow">{name}</div></label>""")
         else:
-            rows.append(f"""<div class="show">{_cover(s.get('artwork_url'))}{text}
-  <span class="meta">No public feed, can not be analyzed</span></div>""")
+            # A spacer where the checkbox would be keeps the artwork in line.
+            rows.append(f"""<div class="show"><span class="nobox"></span>{_cover(s.get('artwork_url'))}
+  <div class="grow">{name}{NO_FEED}</div></div>""")
     if not rows:
         return f'{head}<p class="meta">You have added every trending show here.</p>'
     button = ('<p style="margin-top:14px"><button>Add selected</button></p>' if addable else "")
