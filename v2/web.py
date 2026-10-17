@@ -314,7 +314,10 @@ def today_run(user):
 
     bl = backlog.build(user["id"])
     picks, skips = engine.pick(bl["episodes"], minutes)
-    picks = links.add_apple_episode_urls(picks)  # only picks show "Open in" links
+    longer = engine.a_little_longer(picks, skips, minutes)
+    # Picks and "a little longer" options get play links, so only they need Apple's lookup.
+    picks = links.add_apple_episode_urls(picks)
+    longer = links.add_apple_episode_urls(longer)
     slim = lambda eps: [{k: e.get(k) for k in RUN_FIELDS} for e in eps]  # noqa: E731
     run_id = db.save_run(
         user["id"],
@@ -323,6 +326,8 @@ def today_run(user):
         {
             "picks": slim(picks),
             "skips": slim(skips),
+            "longer": [{**slim([e])[0], "total_min": e["total_min"], "extra_min": e["extra_min"]}
+                       for e in longer],
             "failed": bl["failed"],
             "backlog_size": len(bl["episodes"]),
             "shows": bl["shows"],

@@ -17,7 +17,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py test_production.py -q   # 247 tests, no network
+python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py -q   # 306 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
@@ -47,7 +47,7 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `v2/trending.py` | trending shows per country (in/us/gb), Apple's chart cached 12 h |
 | `v2/rss.py` | RSS → episodes (stdlib). Durations round UP: the budget is a hard cap |
 | `v2/backlog.py` | a user's backlog: last 30 days of their feeds, minus heard; feed cache |
-| `v2/engine.py` | `pick()` — the ONE place the pick method is chosen (now `newest_first`) |
+| `v2/engine.py` | `pick()` — the ONE place the pick method is chosen (now `newest_first_varied`); unused-time reasons, "a little longer" |
 | `v2/links.py` | exact-episode Apple Podcasts links (guid, then exact title) |
 | `v2/baselines.py` | `newest_first`, `random_fill`, `v1_llm` (uses `rank.py`) |
 | `v2/dataset.py` | label file format + validation, saved under `DATA_DIR/labels/` |
@@ -130,6 +130,15 @@ are labelled as searches.
   load says "Could not load trending shows right now" and is never cached.
 - **One add path:** `_add_shows()` in `web.py` (single Add and Add selected) looks up
   every feed URL from Apple; the form's own values are never stored.
+- **Pick rule (`newest_first_varied`):** newest-first fill, at most one episode per
+  show; a second from the same show only when nothing from another show fits. It is
+  the app's own rule; `baselines.newest_first` stays the plain Phase 0 baseline, and
+  runs/feedback record `engine.ENGINE_NAME` so each result stays tied to its rule.
+- **Results page:** with more than 5 min unused, a line says why ("27 min left. Nothing
+  else fits. Your shortest unheard episode is about 31 min." — or that the backlog is
+  used up). "If you have a little longer" lists up to 2 skipped episodes that fit with
+  at most 15 extra minutes (never a pick), saved with the run. Durations read
+  "about N min" because feeds leave out inserted ads; budget math uses the raw number.
 - **Backlog:** last `RECENT_DAYS` (30) of saved feeds minus heard; undated episodes
   are left out. Feeds cached 1 h, Apple episode lists 6 h, trending 12 h, all in the DB.
 

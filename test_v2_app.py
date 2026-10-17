@@ -660,7 +660,7 @@ def test_today_never_goes_over_budget(client, minutes):
     assert sum(p["duration_min"] for p in picks) <= minutes
     ids = {p["id"] for p in picks} | {s["id"] for s in run["payload"]["skips"]}
     assert ids == {"a1", "a2", "b1", "b2", "b3", "c1", "c2", "c3", "d1"}, "30-day window, nothing lost"
-    assert run["engine"] == "newest_first" and run["budget"] == minutes
+    assert run["engine"] == "newest_first_varied" and run["budget"] == minutes
 
 
 def test_custom_minutes_work(client):
@@ -745,7 +745,7 @@ def test_feedback_is_saved_with_picks_budget_and_engine(client):
     r = client.post("/v2/feedback", data={"run": run_id, "verdict": "somewhat"})
     assert r.status_code == 302
     (fb,) = db.all_feedback()
-    assert fb["verdict"] == "somewhat" and fb["budget"] == 45 and fb["engine"] == "newest_first"
+    assert fb["verdict"] == "somewhat" and fb["budget"] == 45 and fb["engine"] == "newest_first_varied"
     assert [p["id"] for p in json.loads(fb["picks"])] == [p["id"] for p in run["payload"]["picks"]]
     assert "you said &ldquo;somewhat&rdquo;" in client.get(f"/v2/run/{run_id}").get_data(as_text=True)
 
@@ -797,6 +797,83 @@ def test_privacy_page_says_google_and_supabase(client):
                  "never sell", "type delete"):
         assert item in html, item
     assert "password, hashed" not in html and "failed log-in" not in html
+
+
+# --- unused time, "a little longer", duration labels ---------------------------------------
+
+USER_CASE_FEEDS = {  # the reported case: 55 min chosen, one 28 min pick, 27 min unused
+    "https://feeds.example/a": make_feed("The Daily", [_item("d28", "Today's news", 28, 1),
+                                                       _item("d41", "Yesterday's news", 41, 2)]),
+    "https://feeds.example/b": make_feed("Second Show", [_item("b31", "B thirty-one", 31, 3),
+                                                         _item("b34", "B thirty-four", 34, 4)]),
+    "https://feeds.example/c": make_feed("Third Show", [_item("c47", "C forty-seven", 47, 5)]),
+}
+
+
+def test_unused_time_line_says_why_with_the_real_shortest(client, monkeypatch):
+    monkeypatch.setattr(rss, "fetch_feed", lambda url: USER_CASE_FEEDS[url])
+    login(client)
+    add(client, "101", "102", "103")
+    run, run_id = run_today(client, 55)
+    assert [p["id"] for p in run["payload"]["picks"]] == ["d28"]
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert "27 min left. Nothing else fits. Your shortest unheard episode is about 31 min." in html
+    assert html.index("27 min left") > html.index("Worth it now"), "under the picks"
+
+
+def test_a_little_longer_shows_close_options_that_are_clearly_not_picks(client, monkeypatch):
+    monkeypatch.setattr(rss, "fetch_feed", lambda url: USER_CASE_FEEDS[url])
+    login(client)
+    add(client, "101", "102", "103")
+    run, run_id = run_today(client, 55)
+    longer = run["payload"]["longer"]
+    assert [e["id"] for e in longer] == ["b31", "b34"], "4 and 7 more minutes; 41 (+14) is third, 47 (+20) is out"
+    assert not {e["id"] for e in longer} & {p["id"] for p in run["payload"]["picks"]}
+
+    html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    flat = " ".join(html.split())
+    assert "If you have a little longer" in flat and "Not picks" in flat
+    assert "Needs about 59 min in total (4 more than you have)" in flat
+    assert "Needs about 62 min in total (7 more than you have)" in flat
+    section = html.split("If you have a little longer")[1].split("Safe to skip")[0]
+    assert 'class="card pick"' not in section, "styled apart from picks"
+    for link in ("Open in Spotify", "Search on YouTube", "Search on Amazon Music", "Play here", "Already heard"):
+        assert link in section, link
+    # "Already heard" works on them too
+    client.post("/v2/heard", data={"run": run_id, "episode": "b31"})
+    assert "b31" in db.heard_ids(user_id_for("me@example.com"))
+
+
+def test_no_unused_line_when_the_time_is_nearly_full(client, monkeypatch):
+    monkeypatch.setattr(rss, "fetch_feed", lambda url: USER_CASE_FEEDS[url])
+    login(client)
+    add(client, "101", "102", "103")
+    _, run_id = run_today(client, 32)  # 28 picked, 4 left
+    html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    assert "min left." not in html
+
+
+def test_durations_read_about(client):
+    login(client)
+    add(client, "101", "102", "103")
+    _, run_id = run_today(client, 30)
+    html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    assert "about 20 min" in html and "about 8 min" in html
+    assert "&middot; 20 min" not in html, "no bare duration labels left"
+
+
+def test_variety_on_the_real_page(client, monkeypatch):
+    feeds = {
+        "https://feeds.example/a": make_feed("Show A", [_item("A1", "A one", 20, 1), _item("A2", "A two", 20, 2)]),
+        "https://feeds.example/b": make_feed("Show B", [_item("B1", "B one", 20, 5)]),
+        "https://feeds.example/c": make_feed("Show C", [_item("C1", "C one", 90, 1)]),
+    }
+    monkeypatch.setattr(rss, "fetch_feed", lambda url: feeds[url])
+    login(client)
+    add(client, "101", "102", "103")
+    run, _ = run_today(client, 40)
+    assert [p["id"] for p in run["payload"]["picks"]] == ["A1", "B1"]
+    assert run["engine"] == "newest_first_varied"
 
 
 # --- Apple Podcasts: exact episode, or say it's a search --------------------------------
@@ -856,13 +933,16 @@ def test_apple_episode_lookup_is_cached_per_show_for_6_hours(client, net, monkey
     login(client)
     add(client, "101", "102", "103")
     run_today(client, 21)
+    first = list(net["episode_lookups"])
+    # The pick's show and the "a little longer" options' shows, each looked up once.
+    assert "101" in first and len(first) == len(set(first)), first
     run_today(client, 21)
-    assert net["episode_lookups"] == ["101"], "one lookup per show, then the cache"
+    assert net["episode_lookups"] == first, "the second run uses the cache for every show"
 
     later = db.time.time() + links.APPLE_CACHE_SECONDS + 1
     monkeypatch.setattr(db.time, "time", lambda: later)
     run_today(client, 21)
-    assert net["episode_lookups"] == ["101", "101"]
+    assert sorted(net["episode_lookups"]) == sorted(first * 2), "looked up again after 6 hours"
 
 
 def test_non_https_apple_episode_urls_are_ignored(client, net):
@@ -1183,7 +1263,7 @@ def test_admin_shows_v2_runs_and_feedback_without_personal_data(client, monkeypa
     assert r.status_code == 200 and r.mimetype == "application/json"
     data = json.loads(r.get_data(as_text=True))
     (row,) = data["runs"]
-    assert row["id"] == run_id and row["budget"] == 30 and row["engine"] == "newest_first"
+    assert row["id"] == run_id and row["budget"] == 30 and row["engine"] == "newest_first_varied"
     assert [p["id"] for p in row["picks"]] == [p["id"] for p in run["payload"]["picks"]]
     assert [f["verdict"] for f in data["feedback"]] == ["yes"]
     assert "me@example.com" not in r.get_data(as_text=True)

@@ -6,6 +6,7 @@ URLs all come from public feeds or Apple's API and are untrusted.
 
 from urllib.parse import quote, quote_plus, urlparse
 
+from v2 import engine
 from views import esc
 from views import page as base_page
 
@@ -54,6 +55,8 @@ _STYLE = """<style>
   .note { color: #6fd08c; margin: 8px 0 12px; }
   .nobox { width: 28px; flex: none; }
   .nofeed { font-style: italic; }
+  .unused { color: #c4c7cc; margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid #2a2c31; }
+  .needs { color: #e8d9a8; font-size: 14px; }
   .landing-cta { margin: 26px 0 14px; }
   .landing-cta .btn { padding: 12px 26px; font-size: 17px; }
   @media (max-width: 480px) {
@@ -288,7 +291,29 @@ def failed_note(failed) -> str:
     )
 
 
-def _pick(run_id: str, ep: dict, heard: bool, csrf: str) -> str:
+def about(minutes) -> str:
+    """Feed durations usually leave out ads inserted at playback (a "28 min" episode
+    can play as 30:56), so the label says "about". Budget math uses the raw number."""
+    return f"about {esc(minutes)} min"
+
+
+def unused_note(picks, skips, budget) -> str:
+    """Say why time is left over: never leave the user guessing at a gap."""
+    info = engine.unused_time(picks, skips, budget)
+    if not info:
+        return ""
+    left = f"{esc(info['left'])} min left."
+    if info["reason"] == "nothing_fits":
+        why = (f"Nothing else fits. Your shortest unheard episode is "
+               f"{about(info['shortest'])}.")
+    elif info["reason"] == "backlog_empty":
+        why = "That's every unheard episode from the last 30 days."
+    else:
+        why = "Some episodes that would fit were kept as safe to skip."
+    return f'<p class="unused">{left} {why}</p>'
+
+
+def _pick(run_id: str, ep: dict, heard: bool, csrf: str, longer: bool = False) -> str:
     audio = ep.get("audio_url")
     player = (
         f'<audio controls preload="none" src="{esc(audio)}"></audio>'
@@ -303,9 +328,11 @@ def _pick(run_id: str, ep: dict, heard: bool, csrf: str) -> str:
       <input type="hidden" name="episode" value="{esc(ep['id'])}">
       <button class="secondary">Already heard</button></form>"""
     )
-    return f"""<div class="card pick">
+    needs = (f'<br><span class="needs">Needs {about(ep["total_min"])} in total '
+             f'({esc(ep["extra_min"])} more than you have)</span>' if longer else "")
+    return f"""<div class="card{'' if longer else ' pick'}">
   <strong>{esc(ep['title'])}</strong><br>
-  <span class="meta">{esc(ep['show'])} &middot; {esc(ep['duration_min'])} min &middot; {esc(ep.get('released'))}</span>
+  <span class="meta">{esc(ep['show'])} &middot; {about(ep['duration_min'])} &middot; {esc(ep.get('released'))}</span>{needs}
   <details><summary class="meta">Play here</summary>{player}</details>
   <div class="links">
     <a href="{esc(spotify_link(ep))}" target="_blank" rel="noopener">Open in Spotify</a>
@@ -320,7 +347,7 @@ def _pick(run_id: str, ep: dict, heard: bool, csrf: str) -> str:
 def _skip(ep: dict) -> str:
     return (
         f'<div class="skip"><strong>{esc(ep["title"])}</strong> '
-        f'<span class="meta">&mdash; {esc(ep["show"])} &middot; {esc(ep["duration_min"])} min</span></div>'
+        f'<span class="meta">&mdash; {esc(ep["show"])} &middot; {about(ep["duration_min"])}</span></div>'
     )
 
 
@@ -337,7 +364,7 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "") -> str:
     else:
         shortest = min(x["duration_min"] for x in skips)
         picks_html = (f'<p class="warn">Nothing fits {esc(budget)} minutes. The shortest '
-                      f"recent episode is <strong>{esc(shortest)} min</strong>.</p>")
+                      f"recent episode is <strong>{about(shortest)}</strong>.</p>")
 
     head, tail = skips[:SKIPS_SHOWN], skips[SKIPS_SHOWN:]
     skips_html = "".join(_skip(x) for x in head)
@@ -355,11 +382,23 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "") -> str:
   <button class="secondary" name="verdict" value="no">No</button>
 </form>"""
 
+    # Only under real picks: with no picks the warning above already says why.
+    unused = unused_note(picks, skips, budget) if picks else ""
+    longer = p.get("longer") or []
+    longer_html = ""
+    if longer:
+        longer_html = ('<h2>If you have a little longer</h2>'
+                       '<p class="meta">Not picks: these fit if you have up to '
+                       f'{engine.LONGER_EXTRA_MIN} more minutes.</p>'
+                       + "".join(_pick(run["id"], x, x["id"] in heard, csrf, longer=True) for x in longer))
+
     return f"""<p class="meta">{esc(p['backlog_size'])} recent unheard episodes across
-{esc(p['shows'])} shows &middot; {esc(used)} of {esc(budget)} min used</p>
+{esc(p['shows'])} shows &middot; about {esc(used)} of {esc(budget)} min used</p>
 {failed_note(p.get('failed'))}
 <h2>Worth it now</h2>
 {picks_html}
+{unused}
+{longer_html}
 <h2>Safe to skip</h2>
 {skips_html or '<p class="meta">Nothing else in your recent backlog.</p>'}
 <h2>Was this worth your time?</h2>
