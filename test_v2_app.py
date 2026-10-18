@@ -751,9 +751,11 @@ def test_feedback_is_saved_with_picks_budget_and_engine(client):
 
 
 def test_a_feed_failure_is_shown_not_dropped(client, net):
+    # Failing from the start: adding a show warms its cache in the background, so a
+    # feed that never loaded has no cached copy to fall back on.
+    net["fail"].add("https://feeds.example/b")
     login(client)
     add(client, "101", "102", "103")
-    net["fail"].add("https://feeds.example/b")
     _, run_id = run_today(client, 60)
     html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
     assert "Could not load 1 show: Second Show (TimeoutError: feed timed out)" in html

@@ -45,6 +45,11 @@ _STYLE = """<style>
   .err { border: 1px solid #6b2a33; background: #2a1418; color: #f1c4cb;
     border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 14px; }
   .ok { color: #6fd08c; }
+  .links a { transition: filter .12s, transform .06s; }
+  .links a:hover { filter: brightness(1.25); border-color: #3a3d44; }
+  .links a:active { filter: brightness(.85); transform: translateY(1px) scale(.98); }
+  button.linkbtn:active, button.linkbtn:hover { transform: none; box-shadow: none; }
+  button.linkbtn:active { opacity: .7; }
   button.linkbtn { background: none; color: #6fd08c; padding: 10px 0; border-radius: 0;
     font-weight: 400; text-decoration: underline; }
   .danger { background: #b3394a; color: #fff; }
@@ -239,7 +244,7 @@ def today_form(n_shows: int, error: str | None = None, csrf: str = "",
 <p style="margin-top:20px"><a class="btn secondary" href="/v2/shows"
   style="background:#2a2c31;color:#e9e9ec">Add shows</a></p>"""
     return f"""{_note(note)}{_error(error)}
-<form method="post" action="/v2/today">{_csrf(csrf)}
+<form method="post" action="/v2/today" data-busy-note="Finding your picks...">{_csrf(csrf)}
   <h2>How much time do you have right now?</h2>
   <div class="row">
     <button name="minutes" value="15">15 min</button>
@@ -250,6 +255,7 @@ def today_form(n_shows: int, error: str | None = None, csrf: str = "",
     <input type="number" name="custom_minutes" min="1" max="600" value="45">
     <button class="secondary" name="minutes" value="custom">Go</button>
   </div>
+  <p class="busy-note" hidden aria-live="polite"></p>
 </form>
 <p class="meta" style="margin-top:20px">Looks at episodes from the last 30 days of your
 {esc(n_shows)} shows. First run can take a few seconds while feeds load.</p>"""

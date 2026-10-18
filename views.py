@@ -14,6 +14,37 @@ HERO_LEDE = "Listen to"
 HERO_REST = "what's worth it."
 _HERO_SPANS = f'<span class="lede">{HERO_LEDE}</span> <span class="rest">{HERO_REST}</span>'
 
+# The ONE script: progressive enhancement, under 30 lines, no libraries. Every form
+# works without it. On submit it marks the form busy (a second submit is ignored),
+# shows "Working..." on the pressed button (its width kept) or the form's
+# data-busy-note, and disables the form's buttons one tick later, after the browser
+# has read the pressed button's name and value. pageshow (e.g. Back) restores it all.
+PROGRESSIVE_JS = """<script>
+document.addEventListener("submit", function (e) {
+  var f = e.target, b = e.submitter, note = f.querySelector(".busy-note");
+  if (f.dataset.busy) { e.preventDefault(); return; }
+  f.dataset.busy = "1";
+  if (note && f.dataset.busyNote) { note.textContent = f.dataset.busyNote; note.hidden = false; }
+  if (b && !(note && f.dataset.busyNote)) {
+    b.style.width = b.offsetWidth + "px"; b.dataset.label = b.textContent; b.textContent = "Working...";
+    if (b.scrollWidth > b.clientWidth) b.textContent = b.dataset.label;  // too narrow: keep the label
+  }
+  if (b) b.classList.add("busy");
+  setTimeout(function () { f.querySelectorAll("button").forEach(function (x) { x.disabled = true; }); }, 0);
+});
+window.addEventListener("pageshow", function () {
+  document.querySelectorAll("form[data-busy]").forEach(function (f) {
+    delete f.dataset.busy;
+    f.querySelectorAll("button").forEach(function (x) {
+      x.disabled = false; x.classList.remove("busy");
+      if (x.dataset.label) { x.textContent = x.dataset.label; delete x.dataset.label; x.style.width = ""; }
+    });
+    var note = f.querySelector(".busy-note");
+    if (note) note.hidden = true;
+  });
+});
+</script>"""
+
 
 def page(title: str, body: str, hero: bool = False) -> str:
     # Large display type is for the landing hero only - every other screen keeps the
@@ -71,6 +102,20 @@ def page(title: str, body: str, hero: bool = False) -> str:
     font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block;
     text-align: center; }}
   button.secondary {{ background: #2a2c31; color: #e9e9ec; }}
+  /* Every button answers a tap: hover lightens, pressed darkens and sinks, keyboard
+     focus gets a clear outline, and a busy form's button pulses. */
+  button, .btn {{ transition: filter .12s, transform .06s, box-shadow .12s; }}
+  button:hover, .btn:hover {{ filter: brightness(1.1); }}
+  button:active, .btn:active {{ filter: brightness(.85); transform: translateY(1px) scale(.98);
+    box-shadow: inset 0 2px 5px rgba(0, 0, 0, .35); }}
+  button:focus-visible, .btn:focus-visible, a:focus-visible, summary:focus-visible,
+  input:focus-visible, textarea:focus-visible {{ outline: 3px solid #6fd08c; outline-offset: 2px; }}
+  button[disabled] {{ cursor: progress; }}
+  button.busy {{ animation: podsen-busy 1s ease-in-out infinite; }}
+  @keyframes podsen-busy {{ 50% {{ opacity: .6; }} }}
+  @media (prefers-reduced-motion: reduce) {{ button.busy {{ animation: none; opacity: .7; }}
+    button, .btn {{ transition: none; }} }}
+  .busy-note {{ margin: 10px 0 0; color: #6fd08c; }}
   input[type=number] {{ font: inherit; background: #16171b; color: #e9e9ec; border: 1px solid #2a2c31;
     border-radius: 8px; padding: 9px 12px; width: 90px; }}
   label {{ display: block; margin: 6px 0; }}
@@ -83,4 +128,4 @@ def page(title: str, body: str, hero: bool = False) -> str:
 </style></head><body><main>
 {header}
 {body}
-</main></body></html>"""
+</main>{PROGRESSIVE_JS}</body></html>"""

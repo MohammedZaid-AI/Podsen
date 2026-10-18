@@ -29,3 +29,9 @@ def _isolate_from_real_services(monkeypatch, tmp_path):
     monkeypatch.setenv("SUPABASE_URL", FAKE_SUPABASE_URL)
     monkeypatch.setenv("SUPABASE_ANON_KEY", FAKE_ANON_KEY)
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", FAKE_SERVICE_ROLE_KEY)
+    # Background cache refreshes (v2/refresh.py) run inline in tests: deterministic, and
+    # never a thread still writing to this test's temp database after it has ended.
+    from v2 import refresh
+
+    monkeypatch.setattr(refresh, "MODE", "inline")
+    monkeypatch.setattr(refresh, "recorded", [])

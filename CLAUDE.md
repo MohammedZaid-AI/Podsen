@@ -17,7 +17,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py -q   # 306 tests, no network
+python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 325 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
@@ -49,6 +49,8 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `v2/backlog.py` | a user's backlog: last 30 days of their feeds, minus heard; feed cache |
 | `v2/engine.py` | `pick()` — the ONE place the pick method is chosen (now `newest_first_varied`); unused-time reasons, "a little longer" |
 | `v2/links.py` | exact-episode Apple Podcasts links (guid, then exact title) |
+| `v2/refresh.py` | stale-while-revalidate: background cache refreshes, one per key |
+| `v2/timing.py` | one log line per request: total, db queries, feeds, Apple |
 | `v2/baselines.py` | `newest_first`, `random_fill`, `v1_llm` (uses `rank.py`) |
 | `v2/dataset.py` | label file format + validation, saved under `DATA_DIR/labels/` |
 | `v2/metrics.py`, `v2/report.py` | evaluation metrics, bootstrap CIs, `python -m v2.report` |
@@ -85,7 +87,11 @@ are labelled as searches.
   Spotify API URL may appear in the repo; the only Spotify string allowed is the
   `open.spotify.com/search/` link-out. `test_v2.py` enforces this (AST + repo scan) —
   don't weaken it to make something pass.
-- No client JS, no build step, no templates directory. Server-rendered strings only.
+- **No client JS except the small progressive enhancement script** (`views.PROGRESSIVE_JS`,
+  under 30 lines, no libraries: busy state on submit, no double submits, restored on
+  Back), **and every page must work without it.** Forms are plain HTML forms; the
+  script never changes what a form sends. No build step, no templates directory;
+  server-rendered strings only.
 - No mock data in the product flow. Test doubles are fine; the FAKE samples are for
   the report only and are marked FAKE in their names and contents.
 - `data/` and `.env` are gitignored — real user data and labels must never be committed.
@@ -141,6 +147,32 @@ are labelled as searches.
   "about N min" because feeds leave out inserted ads; budget math uses the raw number.
 - **Backlog:** last `RECENT_DAYS` (30) of saved feeds minus heard; undated episodes
   are left out. Feeds cached 1 h, Apple episode lists 6 h, trending 12 h, all in the DB.
+
+## Speed
+
+The database is in Supabase **ap-southeast-1 (Singapore)**: from India each round trip
+is ~100-125 ms, so speed is round trips. Every request logs one line
+(`podsen.timing`): `GET /v2/today 200 194ms db=1q/96ms conn=1/new0 feeds=0/0ms
+apple=0/0ms` - path only (never the query string: `?code=`, `?key=`), no emails.
+
+- **One pooled connection per request** (`db._tx()`), returned at teardown. pool_pre_ping
+  costs one round trip per checkout, so it now runs once per request, not per query.
+- **One query per page:** `db._bundle()` loads the user, their shows and heard ids,
+  plus what the page needs next via hints from `login_required` (the run and its
+  verdict; the trending chart; for "Find picks", every show's feed and Apple cache).
+  Never query per show or per episode in a loop; add to the bundle or prefetch.
+- **Stale-while-revalidate:** a cached feed, Apple list or chart is served at once,
+  however old, and refreshed in the background (`v2/refresh.py`). Only a cache miss
+  makes the user wait. Adding a show warms its caches in the background. Tests run
+  refreshes inline (conftest) or record them (`refresh.MODE = "record"`).
+- **The feed cache holds only what picking uses:** last 30 + 14 days, no
+  descriptions (`backlog.for_cache`). Full feeds were up to 1.5 MB per read.
+- **Descriptions live in the `episodes` table** (feed URL + guid, every episode, stored
+  once, never rewritten), written only in the background: by `backlog.refresh_feed`,
+  or queued after a cache-miss fetch. For later layers (`db.episode_descriptions`);
+  the Today / picking path never reads it (`test_speed.py` checks every statement).
+- Measured locally against real Supabase, warm: every page ~200 ms, search ~320 ms
+  (live Apple), "Find picks" POST ~340 ms. Render should be in Singapore too.
 
 ## Evaluation (Phase 0)
 

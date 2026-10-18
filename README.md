@@ -103,7 +103,7 @@ The `v1_llm` method ranks with an LLM through `rank.py` and needs `GROQ_API_KEY`
 
 ```
 pip install pytest
-python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py -q
+python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q
 ```
 
 `test_rank.py` covers the LLM ranking layer (budget filter, JSON repair and retry,

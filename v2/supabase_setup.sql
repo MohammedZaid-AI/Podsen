@@ -11,10 +11,22 @@
 -- Generated from the table definitions in v2/db.py; keep the two in step.
 
 CREATE TABLE IF NOT EXISTS apple_episodes_cache (
+
+CREATE TABLE IF NOT EXISTS apple_episodes_cache (
 	itunes_id VARCHAR NOT NULL, 
 	fetched FLOAT NOT NULL, 
 	payload TEXT NOT NULL, 
 	PRIMARY KEY (itunes_id)
+);
+
+CREATE TABLE IF NOT EXISTS episodes (
+	feed_url TEXT NOT NULL, 
+	guid TEXT NOT NULL, 
+	title TEXT, 
+	description TEXT, 
+	released VARCHAR, 
+	stored FLOAT NOT NULL, 
+	PRIMARY KEY (feed_url, guid)
 );
 
 CREATE TABLE IF NOT EXISTS feed_cache (
@@ -93,6 +105,8 @@ CREATE INDEX IF NOT EXISTS ix_feedback_run_id ON feedback (run_id);
 -- Lock every table to the API: RLS on, no policies.
 
 ALTER TABLE "apple_episodes_cache" ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE "episodes" ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE "feed_cache" ENABLE ROW LEVEL SECURITY;
 

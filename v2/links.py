@@ -6,7 +6,7 @@ Match order: episodeGuid == RSS guid (our episode id), then an exact title match
 promises more than the link does.
 """
 
-from v2 import db, itunes
+from v2 import db, itunes, refresh
 
 APPLE_CACHE_SECONDS = 6 * 3600
 
@@ -30,10 +30,20 @@ def match_episode(ep: dict, apple_episodes: list[dict]) -> str | None:
     return None
 
 
+def refresh_apple(itunes_id: str) -> None:
+    """Background refresh of one show's Apple episode list. On failure the old copy stays."""
+    db.store_apple_episodes(itunes_id, itunes.episodes(itunes_id))
+
+
 def _apple_episodes(itunes_id: str) -> list[dict]:
-    cached = db.cached_apple_episodes(itunes_id, APPLE_CACHE_SECONDS)
-    if cached is not None:
-        return cached
+    # Cached: served at once, however old; past APPLE_CACHE_SECONDS also refreshed in
+    # the background. Only a show with no cached list is looked up while the user waits.
+    entry = db.cache_entry("apple", itunes_id)
+    if entry is not None:
+        found, age = entry
+        if age > APPLE_CACHE_SECONDS:
+            refresh.schedule(("apple", itunes_id), lambda: refresh_apple(itunes_id))
+        return found
     try:
         found = itunes.episodes(itunes_id)
     except Exception:

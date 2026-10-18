@@ -12,7 +12,7 @@ from functools import wraps
 
 from flask import Blueprint, current_app, redirect, request, session
 
-from v2 import app_views, auth, backlog, db, engine, itunes, links, trending
+from v2 import app_views, auth, backlog, db, engine, itunes, links, refresh, trending
 
 bp = Blueprint("v2", __name__, url_prefix="/v2")
 
@@ -60,15 +60,26 @@ def _log_out() -> None:
     session.permanent = False
 
 
-def _current_user():
+def _current_user(run_id=None, trending_country=None, with_caches=False):
     uid = session.get("v2_user")
-    return db.get_user(uid) if uid else None
+    return db.get_user(uid, run_id, trending_country, with_caches) if uid else None
+
+
+# Pages that show a trending chart: their first query brings the cached chart along.
+_TRENDING_PAGES = {"v2.shows", "v2.today", "v2.shows_add_many"}
 
 
 def login_required(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
-        user = _current_user()
+        # Hints so the one user query also fetches what this page needs next.
+        run_hint = kwargs.get("run_id") or request.form.get("run")
+        if not re.fullmatch(r"[0-9a-f]{32}", run_hint or ""):
+            run_hint = None
+        trend_hint = (trending.country(request.args.get("country") or request.form.get("country"))
+                      if request.endpoint in _TRENDING_PAGES else None)
+        # "Find picks" needs every show's cached feed and Apple list: same query too.
+        user = _current_user(run_hint, trend_hint, request.endpoint == "v2.today_run")
         if user is None:
             session.pop("v2_user", None)
             return redirect("/v2/")
@@ -220,15 +231,30 @@ def _add_shows(user, ids) -> tuple[int, int]:
     """The one add path: the form sends only iTunes ids; every feed URL comes from
     Apple's lookup, never from the form. Returns (added, skipped_no_feed)."""
     found = itunes.lookup_many(ids)
-    added = skipped = 0
+    added, skipped, new = 0, 0, []
     for itunes_id in dict.fromkeys(ids):
         show = found.get(itunes_id)
         if show and show["feed_url"]:
             db.add_show(user["id"], show)
+            new.append(show)
             added += 1
         else:
             skipped += 1
+    _warm_caches(new)
     return added, skipped
+
+
+def _warm_caches(new_shows: list[dict]) -> None:
+    """Fetch a new show's feed and Apple episode list in the background, so the first
+    "Find picks" usually finds them cached instead of waiting on the network."""
+    if not new_shows:
+        return
+    db.prefetch_caches([s["feed_url"] for s in new_shows], [s["itunes_id"] for s in new_shows])
+    for s in new_shows:
+        if db.cache_entry("feed", s["feed_url"]) is None:
+            refresh.schedule(("feed", s["feed_url"]), lambda u=s["feed_url"]: backlog.refresh_feed(u))
+        if db.cache_entry("apple", s["itunes_id"]) is None:
+            refresh.schedule(("apple", s["itunes_id"]), lambda i=s["itunes_id"]: links.refresh_apple(i))
 
 
 @bp.get("/shows")

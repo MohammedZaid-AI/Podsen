@@ -5,6 +5,7 @@ operator-only pages.
 """
 
 import hmac
+import logging
 import json
 import os
 import re
@@ -29,6 +30,7 @@ from v2 import dataset as v2_dataset
 from v2 import db as v2_db
 from v2 import label_views
 from v2 import rss as v2_rss
+from v2 import timing as v2_timing
 from v2.web import bp as v2_bp
 
 # --- production settings ---------------------------------------------------------------
@@ -87,6 +89,29 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),  # V2 logins last 30 days
 )
 app.register_blueprint(v2_bp)
+# Each request uses one pooled database connection; give it back when the request ends.
+app.teardown_appcontext(v2_db.close_request_connection)
+if is_production():
+    # Open the pool and check the schema in the background at startup, so the first
+    # visitor doesn't pay for it. Never blocks start-up, and /health doesn't wait for it.
+    import threading
+
+    def _warm_db():
+        try:
+            v2_db.engine()
+        except Exception as e:  # type only: DB errors can carry hostnames
+            logging.getLogger("podsen").warning("database warm-up failed: %s", type(e).__name__)
+
+    threading.Thread(target=_warm_db, name="podsen-db-warm", daemon=True).start()
+# One timing line per request (v2/timing.py): path, status, total, db, feeds, Apple.
+v2_timing.install(app)
+_timing_log = logging.getLogger("podsen.timing")
+_timing_log.setLevel(logging.INFO)
+if not _timing_log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+    _timing_log.addHandler(_h)
+    _timing_log.propagate = False
 
 
 def _admin_key_ok() -> bool:
