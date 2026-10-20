@@ -88,7 +88,12 @@ are labelled as searches.
   Spotify API URL may appear in the repo; the only Spotify string allowed is the
   `open.spotify.com/search/` link-out. `test_v2.py` enforces this (AST + repo scan) —
   don't weaken it to make something pass.
-- **No client JS except the small progressive enhancement script** (`views.PROGRESSIVE_JS`,
+- **Install:** `/manifest.webmanifest` (`app.MANIFEST`, `start_url` `/v2/`) + `static/icon-*.png`
+  make Podsen installable on a home screen (opens full screen). `views.INSTALL_JS` (the second
+  and last script, under 15 lines) reveals the hidden "Install the Podsen app" button when the
+  browser fires `beforeinstallprompt` (Android/desktop Chrome, Edge), or the Share-menu tip on
+  iPhone. It never touches forms. No service worker on purpose (stale picks, other users' pages).
+- **No client JS except the small progressive enhancement script and `INSTALL_JS`** (`views.PROGRESSIVE_JS`,
   under 30 lines, no libraries: busy state on submit, no double submits, restored on
   Back), **and every page must work without it.** Forms are plain HTML forms; the
   script never changes what a form sends. No build step, no templates directory;

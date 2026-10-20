@@ -134,6 +134,33 @@ def index():
     return redirect("/v2/")
 
 
+# Installs Podsen on a phone's home screen: its own icon, opens full screen. No service
+# worker: installing doesn't need one, and an offline cache could serve stale picks or
+# another user's page.
+MANIFEST = {
+    "name": "Podsen",
+    "short_name": "Podsen",
+    "description": "Tell Podsen how much time you have; it picks which episodes are worth it.",
+    "id": "/v2/",
+    "start_url": "/v2/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#101114",
+    "theme_color": "#101114",
+    "icons": [
+        {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png",
+         "purpose": "maskable"},
+    ],
+}
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return app.response_class(json.dumps(MANIFEST), mimetype="application/manifest+json")
+
+
 @app.get("/admin")
 def admin():
     """Every run and every feedback answer, as JSON. No emails or password hashes."""

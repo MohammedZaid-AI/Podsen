@@ -70,6 +70,9 @@ _STYLE = """<style>
   .unused { color: #c4c7cc; margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid #2a2c31; }
   .needs { color: #e8d9a8; font-size: 14px; }
   .landing-cta { margin: 26px 0 14px; }
+  .install { margin-top: 32px; }
+  .ios-hint { margin: 0; padding: 12px 14px; border: 1px solid #2a2c31; border-radius: 10px;
+    background: #16171b; color: #c4c7cc; font-size: 14px; }
   .landing-cta .btn { padding: 12px 26px; font-size: 17px; }
   @media (max-width: 480px) {
     .show img { width: 48px; height: 48px; }
@@ -98,7 +101,15 @@ def page(title: str, body: str, logged_in: bool = False, hero: bool = False, csr
     else:
         nav = ""
     foot = '<footer class="foot"><a href="/v2/privacy">Privacy</a> &middot; Podsen</footer>'
-    return base_page(title, f"{_STYLE}{nav}{body}{foot}", hero=hero)
+    return base_page(title, f"{_STYLE}{nav}{body}{INSTALL}{foot}", hero=hero)
+
+
+# Hidden until views.INSTALL_JS finds the browser can install the app (the button) or
+# it's an iPhone outside the installed app (the tip). Not inside any form.
+INSTALL = ('<div class="install"><button type="button" class="install-btn" hidden>'
+           'Install the Podsen app</button>'
+           '<p class="ios-hint" hidden>Install Podsen on iPhone: tap <strong>Share</strong>, '
+           'then <strong>Add to Home Screen</strong>.</p></div>')
 
 
 def _error(msg):

@@ -223,3 +223,28 @@ def test_landing_is_one_line_one_button_one_line():
     assert body.count("<p") == 3
     assert body.count('href="/v2/login"') == 1 and "Continue with Google" in body
     assert "Works with Spotify, YouTube, Apple Podcasts and Amazon Music." in body
+
+
+def test_the_app_can_be_installed_on_a_home_screen():
+    import views
+    from v2 import app_views
+
+    client = app_mod.app.test_client()
+    r = client.get("/manifest.webmanifest")
+    assert r.status_code == 200 and r.mimetype == "application/manifest+json"
+    m = r.get_json(force=True)
+    assert m["display"] == "standalone" and m["start_url"] == "/v2/" and m["name"] == "Podsen"
+    sizes = {(i["sizes"], i["purpose"]) for i in m["icons"]}
+    assert {("192x192", "any"), ("512x512", "any"), ("512x512", "maskable")} <= sizes
+    for icon in m["icons"]:
+        assert client.get(icon["src"]).status_code == 200, icon["src"]
+    head = views.page("Podsen", "<p>x</p>").split("</head>")[0]
+    for tag in ('<link rel="manifest" href="/manifest.webmanifest">',
+                '<meta name="theme-color" content="#101114">',
+                '<meta name="apple-mobile-web-app-capable" content="yes">'):
+        assert tag in head, tag
+    # The button and the iPhone tip start hidden: without the script nothing shows.
+    html = app_views.page("Podsen", "<p>x</p>")
+    assert '<button type="button" class="install-btn" hidden>' in html
+    assert '<p class="ios-hint" hidden>' in html
+    assert "[hidden] { display: none !important; }" in html
