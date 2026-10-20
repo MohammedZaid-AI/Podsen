@@ -89,7 +89,8 @@ def login_required(view):
 
 
 def _page(title, body, status=200, logged_in=False):
-    return app_views.page(title, body, logged_in=logged_in, csrf=_csrf_token()), status
+    return app_views.page(title, body, logged_in=logged_in, csrf=_csrf_token(),
+                          active=request.path), status
 
 
 def _callback_url() -> str:
@@ -153,7 +154,8 @@ def auth_callback():
 
     db.upsert_user(user["id"], user["email"])
     _log_in(user["id"])
-    return redirect("/v2/today")
+    # Land on My shows: the shows you chose are listed first, then finding more.
+    return redirect("/v2/shows")
 
 
 @bp.post("/logout")

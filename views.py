@@ -49,13 +49,19 @@ window.addEventListener("pageshow", function () {
 def page(title: str, body: str, hero: bool = False) -> str:
     # Large display type is for the landing hero only - every other screen keeps the
     # same two-part treatment at brand size so results/feedback pages stay calm.
+    # The logo sits top left on every page and goes home (the app, once signed in).
+    logo = '<img class="logo" src="/static/podsen-logo.png" alt="" width="56" height="56">'
     if hero:
-        header = f'<p class="wordmark">Podsen</p><h1 class="hero">{_HERO_SPANS}</h1>'
+        header = (f'<a class="brand" href="/v2/">{logo}<p class="wordmark">Podsen</p></a>'
+                  f'<h1 class="hero">{_HERO_SPANS}</h1>')
     else:
-        header = f'<h1 class="wordmark">Podsen</h1><p class="tagline">{_HERO_SPANS}</p>'
+        header = (f'<a class="brand" href="/v2/">{logo}<h1 class="wordmark">Podsen</h1></a>'
+                  f'<p class="tagline">{_HERO_SPANS}</p>')
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,500;1,600&display=swap" rel="stylesheet">
@@ -79,8 +85,12 @@ def page(title: str, body: str, hero: bool = False) -> str:
   img, audio, video {{ max-width: 100%; }}
   /* Editorial display treatment: one sentence, two emphases. Same family and
      baseline throughout - only style, weight and colour change. */
-  .wordmark {{ font-family: var(--display-serif); font-size: 19px; font-weight: 700;
-    letter-spacing: .01em; margin: 0 0 10px; color: #e9e9ec; }}
+  /* The mark is a transparent PNG in the display ink, so it sits on the page itself. */
+  .brand {{ display: inline-flex; align-items: center; gap: 12px; margin: 0 0 12px;
+    min-height: 44px; text-decoration: none; }}
+  .logo {{ width: 56px; height: 56px; flex: none; }}
+  .wordmark {{ font-family: var(--display-serif); font-size: 26px; font-weight: 700;
+    letter-spacing: .01em; margin: 0; color: #e9e9ec; }}
   .hero {{ font-family: var(--display-serif); font-weight: 700;
     font-size: clamp(36px, 7.5vw, 60px); line-height: 1.04; letter-spacing: -.015em;
     margin: 0 0 30px; }}

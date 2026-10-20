@@ -21,6 +21,13 @@ _STYLE = """<style>
   /* Phone-first: every control is at least 44px tall, nothing is wider than 375px. */
   .nav { display: flex; gap: 4px 16px; align-items: center; flex-wrap: wrap; margin: -12px 0 18px; font-size: 15px; }
   .nav a, .foot a, .countries a, .countries strong { display: inline-flex; align-items: center; min-height: 44px; }
+  .nav a, .nav .linkbtn { color: #9aa0a6; text-decoration: none; }
+  .nav a[aria-current=page] { color: #e9e9ec; font-weight: 600; box-shadow: inset 0 -2px 0 #1db954; }
+  .ico { width: 18px; height: 18px; flex: none; margin-right: 8px; }
+  .btn.google { display: inline-flex; align-items: center; background: #fff; color: #1f1f1f; }
+  .btn.google .ico { width: 20px; height: 20px; margin-right: 12px; }
+  .custom { display: flex; align-items: center; gap: 8px; margin: 0; color: #9aa0a6; }
+  .next { margin: 4px 0 14px; }
   .nav form { margin: 0; }
   .foot { margin-top: 48px; padding-top: 14px; border-top: 1px solid #23252a; font-size: 13px; color: #9aa0a6; }
   .show { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #23252a; }
@@ -76,10 +83,17 @@ def _csrf(token: str) -> str:
     return f'<input type="hidden" name="csrf_token" value="{esc(token)}">'
 
 
-def page(title: str, body: str, logged_in: bool = False, hero: bool = False, csrf: str = "") -> str:
+NAV = (("/v2/today", "Today"), ("/v2/shows", "My shows"), ("/v2/account", "Account"))
+
+
+def page(title: str, body: str, logged_in: bool = False, hero: bool = False, csrf: str = "",
+         active: str = "") -> str:
+    """`active`: the current path, so the nav shows where you are."""
     if logged_in:
-        nav = f"""<nav class="nav"><a href="/v2/today">Today</a><a href="/v2/shows">My shows</a>
-  <a href="/v2/account">Account</a>
+        current = ' aria-current="page"'
+        items = "".join(f'<a href="{href}"{current if active == href else ""}>{label}</a>'
+                        for href, label in NAV)
+        nav = f"""<nav class="nav">{items}
   <form method="post" action="/v2/logout">{_csrf(csrf)}<button class="linkbtn">Log out</button></form></nav>"""
     else:
         nav = ""
@@ -93,7 +107,13 @@ def _error(msg):
 
 # --- landing + auth --------------------------------------------------------------------
 
-GOOGLE_BUTTON = '<a class="btn" href="/v2/login">Continue with Google</a>'
+GOOGLE_BUTTON = ('<a class="btn google" href="/v2/login"><img class="ico" src="/static/icons/google.svg" '
+                 'alt="" width="20" height="20">Continue with Google</a>')
+
+
+def _icon(name: str) -> str:
+    """A brand mark beside a link label. Decorative: the label says where it goes."""
+    return f'<img class="ico" src="/static/icons/{name}.svg" alt="" width="18" height="18">'
 
 
 def landing() -> str:
@@ -195,9 +215,9 @@ def shows_page(my_shows: list[dict], query: str = "", results=None, error: str |
     n = len(my_shows)
     if n < MIN_SHOWS:
         need = (f'<p class="warn">Add at least {MIN_SHOWS} shows to get picks '
-                f"&mdash; you have {n}.</p>")
+                f"&mdash; you have {n}. Search or tick trending shows below.</p>")
     else:
-        need = '<p class="meta">Ready. <a href="/v2/today">Pick for today &rarr;</a></p>'
+        need = '<p class="next"><a class="btn" href="/v2/today">Pick episodes for today &rarr;</a></p>'
 
     found = ""
     if results is not None:
@@ -212,11 +232,15 @@ def shows_page(my_shows: list[dict], query: str = "", results=None, error: str |
   <form method="post" action="/v2/shows/remove">{_csrf(csrf)}
     <input type="hidden" name="itunes_id" value="{esc(s['itunes_id'])}">
     <button class="secondary">Remove</button></form></div>"""
-        for s in my_shows
-    ) or '<p class="meta">No shows yet. Search above to add some.</p>'
+        for s in reversed(my_shows)  # newest first: a show you just added is on top
+    ) or '<p class="meta">No shows yet. Search below to add some.</p>'
 
     trend = trending_section(trending, have, csrf, "shows", "Trending") if trending else ""
+    # The shows you chose come first; finding more comes after.
     return f"""{_note(note)}
+<h2>My shows ({n})</h2>
+{need}
+{mine}
 <h2>Find your shows</h2>
 <form method="get" action="/v2/shows" class="row" style="flex-wrap:nowrap">
   <input type="search" name="q" value="{esc(query)}" placeholder="Search podcasts" required maxlength="100">
@@ -224,10 +248,7 @@ def shows_page(my_shows: list[dict], query: str = "", results=None, error: str |
 </form>
 {_error(error)}
 {found}
-{trend}
-<h2>My shows ({n})</h2>
-{need}
-{mine}"""
+{trend}"""
 
 
 # --- today -------------------------------------------------------------------------------
@@ -252,13 +273,15 @@ def today_form(n_shows: int, error: str | None = None, csrf: str = "",
     <button name="minutes" value="60">60 min</button>
   </div>
   <div class="row" style="margin-top:12px">
-    <input type="number" name="custom_minutes" min="1" max="600" value="45">
-    <button class="secondary" name="minutes" value="custom">Go</button>
+    <label class="custom">Other:
+      <input type="number" name="custom_minutes" min="1" max="600" value="45"> min</label>
+    <button class="secondary" name="minutes" value="custom">Pick</button>
   </div>
   <p class="busy-note" hidden aria-live="polite"></p>
 </form>
-<p class="meta" style="margin-top:20px">Looks at episodes from the last 30 days of your
-{esc(n_shows)} shows. First run can take a few seconds while feeds load.</p>"""
+<p class="meta" style="margin-top:20px">Tap a time. Podsen picks the newest episodes from your
+{esc(n_shows)} shows (last 30 days) that fit it, and lists the rest as safe to skip.
+First run can take a few seconds while feeds load.</p>"""
 
 
 # --- results -----------------------------------------------------------------------------
@@ -280,9 +303,9 @@ def _apple_link(ep: dict) -> str:
     """Exact episode when Apple's guid/title match found one; otherwise say it's a search."""
     exact, show = ep.get("apple_episode_url"), ep.get("apple_url")
     if exact and urlparse(exact).scheme == "https":
-        return f'<a href="{esc(exact)}" target="_blank" rel="noopener">Open in Apple Podcasts</a>'
+        return f'<a href="{esc(exact)}" target="_blank" rel="noopener">{_icon("applepodcasts")}Open in Apple Podcasts</a>'
     if show and urlparse(show).scheme == "https":
-        return f'<a href="{esc(show)}" target="_blank" rel="noopener">Search on Apple Podcasts</a>'
+        return f'<a href="{esc(show)}" target="_blank" rel="noopener">{_icon("applepodcasts")}Search on Apple Podcasts</a>'
     return ""
 
 
@@ -341,10 +364,10 @@ def _pick(run_id: str, ep: dict, heard: bool, csrf: str, longer: bool = False) -
   <span class="meta">{esc(ep['show'])} &middot; {about(ep['duration_min'])} &middot; {esc(ep.get('released'))}</span>{needs}
   <details><summary class="meta">Play here</summary>{player}</details>
   <div class="links">
-    <a href="{esc(spotify_link(ep))}" target="_blank" rel="noopener">Open in Spotify</a>
+    <a href="{esc(spotify_link(ep))}" target="_blank" rel="noopener">{_icon("spotify")}Open in Spotify</a>
     {_apple_link(ep)}
-    <a href="{esc(youtube_link(ep))}" target="_blank" rel="noopener">Search on YouTube</a>
-    <a href="{esc(amazon_music_link(ep))}" target="_blank" rel="noopener">Search on Amazon Music</a>
+    <a href="{esc(youtube_link(ep))}" target="_blank" rel="noopener">{_icon("youtube")}Search on YouTube</a>
+    <a href="{esc(amazon_music_link(ep))}" target="_blank" rel="noopener">{_icon("amazonmusic")}Search on Amazon Music</a>
     {heard_ctl}
   </div>
 </div>"""

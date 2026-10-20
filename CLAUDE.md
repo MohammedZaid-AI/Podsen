@@ -56,6 +56,7 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `v2/metrics.py`, `v2/report.py` | evaluation metrics, bootstrap CIs, `python -m v2.report` |
 | `v2/label_views.py` | HTML for `/label` |
 | `v2/sample_data/` | 3 **FAKE** labeled backlogs so the report runs without real labels |
+| `static/` | logo (`podsen-logo.png`: transparent mark cut from `zaid pic.jpg`, 3x for 56px), favicon, `apple-touch-icon.png`, 1024px masters in `brand/`, brand icons in `icons/` (Google G; Spotify, Apple Podcasts, YouTube, Amazon from Simple Icons) |
 | `conftest.py` | test safety net: no test can reach the real Supabase (see below) |
 
 ## Lessons that cost real time — keep them
@@ -109,7 +110,7 @@ are labelled as searches.
   JS. `/v2/login` makes a code_verifier (kept in the session as `v2_pkce`, single use)
   and redirects to `{SUPABASE_URL}/auth/v1/authorize?provider=google&...&code_challenge`.
   `/v2/auth/callback?code=` exchanges it at `/auth/v1/token?grant_type=pkce` with the
-  anon key. The callback URL is built from the request host; Supabase only redirects to
+  anon key, then lands on My shows (your shows first, newest added on top). The callback URL is built from the request host; Supabase only redirects to
   URLs on its allow-list. Errors (cancelled, used/expired code, missing or wrong
   verifier, Supabase down) each get a plain message and a retry button.
 - **Session:** `v2_user` = the Supabase user id; logins last 30 days (permanent

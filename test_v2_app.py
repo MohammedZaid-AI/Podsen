@@ -262,7 +262,7 @@ def login(c, email="me@example.com"):
     uid = user_id_for(email)
     code = c.supa.issue(challenge, {"id": uid, "email": email})
     r = c.get(f"/v2/auth/callback?code={code}")
-    assert r.status_code == 302 and r.headers["Location"].endswith("/v2/today"), r.get_data(as_text=True)
+    assert r.status_code == 302 and r.headers["Location"].endswith("/v2/shows"), r.get_data(as_text=True)
     return uid
 
 
@@ -421,7 +421,8 @@ def test_no_password_pages_remain(client):
     assert client.get("/v2/signup").status_code == 404
     assert client.c.post("/v2/login", data={"email": "a@b.c", "password": "x"}).status_code in (400, 405)
     html = client.get("/v2/").get_data(as_text=True)
-    assert 'href="/v2/login">Continue with Google</a>' in html
+    assert 'href="/v2/login">' in html and 'src="/static/icons/google.svg"' in html
+    assert "Continue with Google</a>" in html
     assert 'type="password"' not in html and "/v2/signup" not in html
 
 
@@ -502,7 +503,8 @@ def test_today_hides_suggestions_once_there_are_three_shows(client):
 def test_my_shows_has_a_trending_section_under_the_search_box(client):
     login(client)
     html = client.get("/v2/shows").get_data(as_text=True)
-    assert html.index('action="/v2/shows"') < html.index("<h2>Trending</h2>") < html.index("My shows (")
+    # The shows you chose come first, then search, then trending.
+    assert html.index("My shows (") < html.index('action="/v2/shows"') < html.index("<h2>Trending</h2>")
     assert 'href="/v2/shows?country=us"' in html
     assert 'value="101"' in _trending_form(html)
 
@@ -718,7 +720,8 @@ def test_play_links_are_escaped_and_url_encoded(client):
     assert '<audio controls preload="none" src="https://cdn.example/a1.mp3?a=1&amp;b=2">' in html
     # no Apple episode data in this test: honest fallback to the show page
     assert ('href="https://podcasts.apple.com/us/podcast/id101?uo=4&amp;x=1" target="_blank" '
-            'rel="noopener">Search on Apple Podcasts</a>') in html
+            'rel="noopener"><img class="ico" src="/static/icons/applepodcasts.svg" alt="" '
+            'width="18" height="18">Search on Apple Podcasts</a>') in html
     assert "Open in Apple Podcasts" not in html
 
 
@@ -1317,3 +1320,26 @@ def test_v2_package_never_imports_spotify():
     out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True)
     assert "v2.web" in out.stdout and "v2.auth" in out.stdout, "every V2 module was imported"
     assert out.stdout.strip().endswith("False")
+
+
+def test_logo_and_brand_icons_are_served_and_on_every_page(client):
+    for path in ("/static/podsen-logo.png", "/static/favicon.png", "/static/icons/google.svg",
+                 "/static/icons/spotify.svg", "/static/icons/applepodcasts.svg",
+                 "/static/icons/youtube.svg", "/static/icons/amazonmusic.svg"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert b"<script" not in r.data, path
+    assert 'src="/static/podsen-logo.png"' in client.get("/v2/").get_data(as_text=True)
+    login(client)
+    for path in ("/v2/today", "/v2/shows", "/v2/account", "/v2/privacy"):
+        html = client.get(path).get_data(as_text=True)
+        assert '<a class="brand" href="/v2/"><img class="logo" src="/static/podsen-logo.png"' in html, path
+        assert f'href="{path}" aria-current="page"' in html or path == "/v2/privacy", path
+
+
+def test_my_shows_lists_the_newest_added_first(client):
+    login(client)
+    add(client, "101", "102")
+    html = client.get("/v2/shows").get_data(as_text=True)
+    mine = html.split("My shows (2)")[1].split("Find your shows")[0]
+    assert mine.index('value="102"') < mine.index('value="101"')
