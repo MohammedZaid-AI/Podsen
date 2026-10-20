@@ -148,9 +148,8 @@ def landing_assets(name):
     return send_from_directory(LANDING_DIR / "assets", name)  # refuses paths outside it
 
 
-# Installs Podsen on a phone's home screen: its own icon, opens full screen at /v2/. No
-# service worker: installing doesn't need one, and an offline cache could serve stale
-# picks or another user's page.
+# PWA: installs Podsen on a phone's home screen from the landing page's "Install App":
+# its own icon, opens full screen (standalone) at /v2/.
 MANIFEST = {
     "name": "Podsen",
     "short_name": "Podsen",
@@ -170,9 +169,41 @@ MANIFEST = {
 }
 
 
-@app.get("/manifest.webmanifest")
+@app.get("/manifest.json")
 def manifest():
-    return app.response_class(json.dumps(MANIFEST), mimetype="application/manifest+json")
+    # related_applications lets the landing page ask Chrome "is this already installed?"
+    # (getInstalledRelatedApps); it needs this manifest's absolute URL.
+    own = {"platform": "webapp", "url": f"{request.url_root}manifest.json"}
+    body = json.dumps({**MANIFEST, "related_applications": [own]})
+    return app.response_class(body, mimetype="application/manifest+json")
+
+
+# The service worker caches nothing: every page comes from the network, so picks are
+# never stale and no user's page is ever stored on the phone. It only answers a failed
+# page load (no connection) with a short offline page instead of the browser's error.
+SERVICE_WORKER = """// Podsen service worker. Caches nothing; see app.py.
+var OFFLINE = '<!doctype html><meta charset="utf-8"><meta name="viewport" ' +
+  'content="width=device-width,initial-scale=1"><title>Podsen</title><body style="margin:0;' +
+  'background:#101114;color:#e9e9ec;font:16px/1.5 -apple-system,Segoe UI,Roboto,sans-serif">' +
+  '<main style="max-width:640px;margin:0 auto;padding:28px 16px"><h1 style="font-size:22px">' +
+  'You are offline</h1><p>Podsen needs a connection to load your shows and picks. Check your ' +
+  'connection, then <a style="color:#6fd08c" href="/v2/">try again</a>.</p></main></body>';
+self.addEventListener("install", function () { self.skipWaiting(); });
+self.addEventListener("activate", function (e) { e.waitUntil(self.clients.claim()); });
+self.addEventListener("fetch", function (e) {
+  if (e.request.mode !== "navigate" || e.request.method !== "GET") return;  // forms, images: untouched
+  e.respondWith(fetch(e.request).catch(function () {
+    return new Response(OFFLINE, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }));
+});
+"""
+
+
+@app.get("/sw.js")
+def service_worker():
+    r = app.response_class(SERVICE_WORKER, mimetype="application/javascript")
+    r.headers["Cache-Control"] = "no-cache"  # browsers pick up a changed worker at once
+    return r
 
 
 @app.get("/admin")

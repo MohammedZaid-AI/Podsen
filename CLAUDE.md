@@ -89,13 +89,15 @@ are labelled as searches.
   Spotify API URL may appear in the repo; the only Spotify string allowed is the
   `open.spotify.com/search/` link-out. `test_v2.py` enforces this (AST + repo scan) —
   don't weaken it to make something pass.
-- **Landing page + install:** `/` serves `landing/` (info about Podsen + "Install the Podsen app").
-  Its source is a separate project, `../podsen-landing`; edit there, run `python sync_landing.py`,
-  commit `landing/`. It must be on the app's address: a browser can only install the site you're
-  on. `/manifest.webmanifest` (`app.MANIFEST`, `start_url` `/v2/`) + `static/icon-*.png` make the
-  installed icon open the app full screen. The landing page's one script opens the browser's
-  install dialog (Android/desktop Chrome, Edge); elsewhere the button jumps to the steps. The
-  app itself has no install UI. No service worker (stale picks, other users' pages).
+- **Landing page + Install App (PWA):** `/` serves `landing/`, a copy of the separate project
+  `../podsen-landing` (edit there, `python sync_landing.py`, commit `landing/`). It must be on the
+  app's address: a browser can only install the site you're on. The app serves `/manifest.json`
+  (`app.MANIFEST`: `start_url` `/v2/`, standalone, icons in `static/icon-*.png`; plus
+  `related_applications` so Chrome can tell the page it's installed) and `/sw.js`
+  (`app.SERVICE_WORKER`): caches NOTHING, only answers a failed GET page load with an offline
+  page; forms, images and redirects pass straight through. The landing script registers it and
+  runs the button: install prompt on Android/desktop Chrome/Edge, Safari steps on iPhone/iPad,
+  "installed" status after; opened from the icon it goes to `/v2/`. The app has no install UI.
 - **No client JS in the app except the small progressive enhancement script** (`views.PROGRESSIVE_JS`,
   under 30 lines, no libraries: busy state on submit, no double submits, restored on
   Back), **and every page must work without it.** Forms are plain HTML forms; the

@@ -230,7 +230,7 @@ def test_the_app_can_be_installed_on_a_home_screen():
     from v2 import app_views
 
     client = app_mod.app.test_client()
-    r = client.get("/manifest.webmanifest")
+    r = client.get("/manifest.json")
     assert r.status_code == 200 and r.mimetype == "application/manifest+json"
     m = r.get_json(force=True)
     assert m["display"] == "standalone" and m["start_url"] == "/v2/" and m["name"] == "Podsen"
@@ -239,7 +239,9 @@ def test_the_app_can_be_installed_on_a_home_screen():
     for icon in m["icons"]:
         assert client.get(icon["src"]).status_code == 200, icon["src"]
     head = views.page("Podsen", "<p>x</p>").split("</head>")[0]
-    for tag in ('<link rel="manifest" href="/manifest.webmanifest">',
+    assert m["related_applications"] == [
+        {"platform": "webapp", "url": "http://localhost/manifest.json"}]  # "already installed?"
+    for tag in ('<link rel="manifest" href="/manifest.json">',
                 '<meta name="theme-color" content="#101114">',
                 '<meta name="apple-mobile-web-app-capable" content="yes">'):
         assert tag in head, tag
@@ -253,11 +255,13 @@ def test_landing_page_is_served_at_root_with_the_install_button():
     assert r.status_code == 200 and r.mimetype == "text/html"
     html = r.get_data(as_text=True)
     # Same address as the app, so its install button installs the app.
-    assert '<link rel="manifest" href="/manifest.webmanifest">' in html
-    assert 'class="btn install-btn" href="#install">Install the Podsen app</a>' in html
-    assert 'id="install"' in html and "beforeinstallprompt" in html
-    # Links stay on this site; images come from /assets/.
-    assert "onrender.com" not in html and 'href="/v2/"' in html
+    assert '<link rel="manifest" href="/manifest.json">' in html
+    assert 'class="btn install-btn" href="#install">Install App</a>' in html
+    assert 'id="install"' in html and 'id="ios-steps" hidden' in html and 'id="install-status" hidden' in html
+    for js in ("beforeinstallprompt", ".prompt()", "appinstalled", 'register("/sw.js")',
+               "getInstalledRelatedApps", "display-mode: standalone"):
+        assert js in html, js
+    assert 'href="/v2/"' in html  # once installed: open the app here
     for asset in ("assets/podsen-logo.png", "assets/favicon.png", "assets/icons/spotify.svg"):
         assert asset in html and client.get("/" + asset).status_code == 200, asset
     assert client.get("/assets/../app.py").status_code == 404
@@ -267,3 +271,14 @@ def test_root_goes_to_the_app_when_there_is_no_landing_copy(monkeypatch, tmp_pat
     monkeypatch.setattr(app_mod, "LANDING_DIR", tmp_path)
     r = app_mod.app.test_client().get("/")
     assert r.status_code == 302 and r.headers["Location"].endswith("/v2/")
+
+
+def test_service_worker_caches_nothing_and_only_answers_offline_page_loads():
+    client = app_mod.app.test_client()
+    r = client.get("/sw.js")
+    assert r.status_code == 200 and r.mimetype == "application/javascript"
+    assert r.headers["Cache-Control"] == "no-cache"
+    js = r.get_data(as_text=True)
+    assert "caches" not in js and "cache.put" not in js  # nothing stored on the phone
+    assert 'e.request.mode !== "navigate" || e.request.method !== "GET"' in js  # forms untouched
+    assert "You are offline" in js
