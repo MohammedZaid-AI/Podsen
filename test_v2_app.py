@@ -1235,9 +1235,10 @@ def test_migration_refuses_without_a_target(tmp_path, monkeypatch):
 
 # --- home page, removed V1 routes, /admin ----------------------------------------------
 
-def test_home_page_redirects_to_the_v2_app(client):
+def test_home_page_is_the_landing_page_even_when_signed_in(client):
+    login(client)
     r = client.get("/")
-    assert r.status_code == 302 and r.headers["Location"].endswith("/v2/")
+    assert r.status_code == 200 and "Install the Podsen app" in r.get_data(as_text=True)
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,175 @@
+<!doctype html>
+<!--
+  Podsen landing page: info about Podsen and installing the app on a phone.
+  Edit it here. The app serves a copy at / (the app itself is at /v2/), because a
+  browser can only install the site you are on: landing page and app must share one
+  address. To update the copy: python sync_landing.py (in the podsen folder).
+
+  One small script: on Android/desktop Chrome and Edge the "Install the Podsen app"
+  button opens the browser's install dialog. Without it (iPhone, JS off) the button
+  jumps to the install steps.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Podsen: listen to what's worth it</title>
+<meta name="description" content="Tell Podsen how much time you have, and it picks which episodes from your podcasts are worth it.">
+<meta name="theme-color" content="#101114">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Podsen">
+<meta property="og:title" content="Podsen">
+<meta property="og:description" content="Tell Podsen how much time you have, and it picks which episodes from your podcasts are worth it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,500;1,600&display=swap" rel="stylesheet">
+<style>
+  /* Same look as the app: dark page, Playfair display type, green actions, coral lede. */
+  :root {
+    color-scheme: dark;
+    --bg: #101114; --card: #16171b; --line: #2a2c31; --rule: #23252a;
+    --ink: #e9e9ec; --ink-display: #F4F1EC; --muted: #9aa0a6;
+    --green: #1db954; --green-ink: #06240f; --link: #6fd08c;
+    --accent-coral: #E8637A;
+    --display-serif: "Playfair Display", "Iowan Old Style", Palatino, Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 -apple-system, Segoe UI, Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%; overflow-wrap: break-word; }
+  main { max-width: 640px; margin: 0 auto; padding: 28px 16px 64px; }
+  img { max-width: 100%; }
+  a { color: var(--link); }
+
+  .brand { display: flex; align-items: center; gap: 12px; margin: 0 0 18px; }
+  .logo { width: 56px; height: 56px; flex: none; }
+  .wordmark { font-family: var(--display-serif); font-size: 26px; font-weight: 700; margin: 0; }
+  .hero { font-family: var(--display-serif); font-weight: 700;
+    font-size: clamp(36px, 7.5vw, 60px); line-height: 1.04; letter-spacing: -.015em; margin: 0 0 24px; }
+  .lede { font-style: italic; font-weight: 600; color: var(--accent-coral); }
+  .rest { color: var(--ink-display); }
+  .standfirst { font-family: var(--display-serif); font-size: 21px; line-height: 1.35;
+    color: var(--ink-display); margin: 0 0 22px; }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
+  /* 44px minimum: a comfortable tap target on phones. */
+  .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
+    padding: 12px 24px; border-radius: 999px; font-weight: 600; font-size: 17px;
+    text-decoration: none; background: var(--green); color: var(--green-ink);
+    transition: filter .12s, transform .06s; }
+  .btn.secondary { background: var(--line); color: var(--ink); }
+  .btn:hover { filter: brightness(1.1); }
+  .btn:active { filter: brightness(.85); transform: translateY(1px) scale(.98); }
+  a:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+
+  .works { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+    color: var(--muted); font-size: 14px; margin: 0; }
+  .marks { display: inline-flex; gap: 6px; }
+  .marks img { width: 18px; height: 18px; }
+
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 44px 0 14px; }
+  ol, ul { padding-left: 22px; margin: 0; }
+  li { margin: 0 0 12px; }
+  li strong { color: var(--ink-display); }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 12px 0;
+    background: var(--card); }
+  .card h3 { font-size: 17px; margin: 0 0 10px; }
+  .card li { margin: 0 0 6px; }
+  .meta { color: var(--muted); font-size: 14px; }
+
+  footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--rule);
+    font-size: 13px; color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="brand">
+    <img class="logo" src="assets/podsen-logo.png" alt="" width="56" height="56">
+    <p class="wordmark">Podsen</p>
+  </header>
+
+  <h1 class="hero"><span class="lede">Listen to</span> <span class="rest">what's worth it.</span></h1>
+  <p class="standfirst">Tell Podsen how much time you have, and it picks which episodes from
+  your podcasts are worth it.</p>
+
+  <p class="cta">
+    <a class="btn install-btn" href="#install">Install the Podsen app</a>
+  </p>
+  <p class="works"><span class="marks">
+    <img src="assets/icons/spotify.svg" alt="" width="18" height="18">
+    <img src="assets/icons/youtube.svg" alt="" width="18" height="18">
+    <img src="assets/icons/applepodcasts.svg" alt="" width="18" height="18">
+    <img src="assets/icons/amazonmusic.svg" alt="" width="18" height="18">
+  </span>Works with Spotify, YouTube, Apple Podcasts and Amazon Music.</p>
+
+  <h2>How it works</h2>
+  <ol>
+    <li><strong>Add the shows you already follow.</strong> Search for them, or tick a few from
+      what's trending in India, the US or the UK.</li>
+    <li><strong>Say how much time you have.</strong> 15, 30 or 60 minutes, or any number you type.</li>
+    <li><strong>Get picks that fit.</strong> The newest episodes from your shows, one per show where
+      it can, never more than your time. The rest are listed as safe to skip.</li>
+    <li><strong>Press play.</strong> Listen right on the page, or open the episode in Spotify,
+      Apple Podcasts, YouTube or Amazon Music.</li>
+  </ol>
+
+  <h2>Made for a full queue</h2>
+  <p>You follow a lot of shows, there are dozens of episodes you haven't heard, and you're not
+  unsubscribing from any of them. Podsen doesn't ask you to. It tells you what to play in the
+  time you have right now.</p>
+  <ul>
+    <li>Picks come only from the shows you add.</li>
+    <li>It never connects to your Spotify or Apple account. It reads each show's public feed.</li>
+    <li>Mark an episode as heard and it stops coming up.</li>
+    <li>Sign in with Google. Delete your account and everything in it whenever you like.</li>
+  </ul>
+
+  <section id="install">
+    <h2>Install Podsen on your phone</h2>
+    <p>No app store needed. Install it once and Podsen opens from its own icon, full screen,
+    like any other app.</p>
+
+    <div class="card">
+      <h3>iPhone</h3>
+      <ol>
+        <li>Open <a href="/v2/">the Podsen app page</a> in <strong>Safari</strong>.</li>
+        <li>Tap the <strong>Share</strong> button <span class="meta">(the square with an arrow)</span>.</li>
+        <li>Choose <strong>Add to Home Screen</strong>, then tap <strong>Add</strong>.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3>Android</h3>
+      <ol>
+        <li>Tap <strong>Install the Podsen app</strong> at the top of this page, then
+          <strong>Install</strong>.</li>
+        <li>No install dialog? Tap Chrome's <strong>&#8942;</strong> menu, top right.</li>
+        <li>Choose <strong>Install app</strong> or <strong>Add to Home screen</strong>, then tap <strong>Install</strong>.</li>
+      </ol>
+    </div>
+
+    <p class="meta">Sign in with Google once and you stay signed in for 30 days.</p>
+  </section>
+
+  <footer>Podsen &middot; Listen to what's worth it.</footer>
+</main>
+<script>
+var podsenInstall = null;
+window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); podsenInstall = e; });
+window.addEventListener("appinstalled", function () { podsenInstall = null; });
+document.addEventListener("click", function (e) {
+  if (!e.target.closest(".install-btn") || !podsenInstall) return;
+  e.preventDefault();
+  podsenInstall.prompt();
+  podsenInstall.userChoice.then(function () { podsenInstall = null; });
+});
+</script>
+</body>
+</html>

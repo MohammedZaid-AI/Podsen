@@ -46,27 +46,6 @@ window.addEventListener("pageshow", function () {
 </script>"""
 
 
-# The second script: installing the app. Like PROGRESSIVE_JS it only reveals things;
-# without it the .install-btn and .ios-hint stay hidden and every page still works.
-# Android/desktop Chrome and Edge fire beforeinstallprompt when the app can be
-# installed: the button then opens the browser's own install dialog. iPhone has no
-# such event, so outside the installed app it shows the Share-menu tip instead.
-INSTALL_JS = """<script>
-var podsenInstall = null;
-function podsenShow(sel, on) { document.querySelectorAll(sel).forEach(function (x) { x.hidden = !on; }); }
-window.addEventListener("beforeinstallprompt", function (e) {
-  e.preventDefault(); podsenInstall = e; podsenShow(".install-btn", true);
-});
-window.addEventListener("appinstalled", function () { podsenInstall = null; podsenShow(".install-btn", false); });
-document.addEventListener("click", function (e) {
-  if (!e.target.closest(".install-btn") || !podsenInstall) return;
-  podsenInstall.prompt();
-  podsenInstall.userChoice.then(function () { podsenInstall = null; podsenShow(".install-btn", false); });
-});
-if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone) podsenShow(".ios-hint", true);
-</script>"""
-
-
 def page(title: str, body: str, hero: bool = False) -> str:
     # Large display type is for the landing hero only - every other screen keeps the
     # same two-part treatment at brand size so results/feedback pages stay calm.
@@ -103,10 +82,7 @@ def page(title: str, body: str, hero: bool = False) -> str:
     --ink-on-light: #1A1A1A;
     --display-serif: "Playfair Display", "Iowan Old Style", Palatino, Georgia, serif;
   }}
-  * {{ box-sizing: border-box; }}
-  /* `hidden` must win over button/.btn display rules (the install button relies on it). */
-  [hidden] {{ display: none !important; }}
-  body {{ margin: 0; background: #101114; color: #e9e9ec;
+  * {{ box-sizing: border-box; }}  body {{ margin: 0; background: #101114; color: #e9e9ec;
     font: 16px/1.5 -apple-system, Segoe UI, Roboto, sans-serif;
     -webkit-text-size-adjust: 100%; overflow-wrap: break-word; }}
   /* Phones first: a 16px gutter, and nothing may be wider than the screen. */
@@ -167,4 +143,4 @@ def page(title: str, body: str, hero: bool = False) -> str:
 </style></head><body><main>
 {header}
 {body}
-</main>{PROGRESSIVE_JS}{INSTALL_JS}</body></html>"""
+</main>{PROGRESSIVE_JS}</body></html>"""

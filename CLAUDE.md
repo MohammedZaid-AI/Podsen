@@ -23,7 +23,7 @@ python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
 ```
 
-`/` redirects to the app at `/v2/`. `/label` (hand-label backlogs for evaluation) and
+`/` is the landing page (`landing/`); the app is at `/v2/`. `/label` (hand-label backlogs for evaluation) and
 `/admin?key=ADMIN_KEY` (runs + feedback as JSON) are operator pages.
 
 There is **no auto-reload** — after editing, kill the process on port 3000 and
@@ -57,6 +57,7 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `v2/label_views.py` | HTML for `/label` |
 | `v2/sample_data/` | 3 **FAKE** labeled backlogs so the report runs without real labels |
 | `static/` | logo (`podsen-logo.png`: transparent mark cut from `zaid pic.jpg`, 3x for 56px), favicon, `apple-touch-icon.png`, 1024px masters in `brand/`, brand icons in `icons/` (Google G; Spotify, Apple Podcasts, YouTube, Amazon from Simple Icons) |
+| `landing/`, `sync_landing.py` | copy of `../podsen-landing`, served at `/`; the sync script refreshes it |
 | `conftest.py` | test safety net: no test can reach the real Supabase (see below) |
 
 ## Lessons that cost real time — keep them
@@ -88,12 +89,14 @@ are labelled as searches.
   Spotify API URL may appear in the repo; the only Spotify string allowed is the
   `open.spotify.com/search/` link-out. `test_v2.py` enforces this (AST + repo scan) —
   don't weaken it to make something pass.
-- **Install:** `/manifest.webmanifest` (`app.MANIFEST`, `start_url` `/v2/`) + `static/icon-*.png`
-  make Podsen installable on a home screen (opens full screen). `views.INSTALL_JS` (the second
-  and last script, under 15 lines) reveals the hidden "Install the Podsen app" button when the
-  browser fires `beforeinstallprompt` (Android/desktop Chrome, Edge), or the Share-menu tip on
-  iPhone. It never touches forms. No service worker on purpose (stale picks, other users' pages).
-- **No client JS except the small progressive enhancement script and `INSTALL_JS`** (`views.PROGRESSIVE_JS`,
+- **Landing page + install:** `/` serves `landing/` (info about Podsen + "Install the Podsen app").
+  Its source is a separate project, `../podsen-landing`; edit there, run `python sync_landing.py`,
+  commit `landing/`. It must be on the app's address: a browser can only install the site you're
+  on. `/manifest.webmanifest` (`app.MANIFEST`, `start_url` `/v2/`) + `static/icon-*.png` make the
+  installed icon open the app full screen. The landing page's one script opens the browser's
+  install dialog (Android/desktop Chrome, Edge); elsewhere the button jumps to the steps. The
+  app itself has no install UI. No service worker (stale picks, other users' pages).
+- **No client JS in the app except the small progressive enhancement script** (`views.PROGRESSIVE_JS`,
   under 30 lines, no libraries: busy state on submit, no double submits, restored on
   Back), **and every page must work without it.** Forms are plain HTML forms; the
   script never changes what a form sends. No build step, no templates directory;

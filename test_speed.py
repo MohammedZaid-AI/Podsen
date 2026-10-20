@@ -223,20 +223,8 @@ def test_the_script_is_present_once_and_under_30_lines():
     lines = [ln for ln in body.splitlines() if ln.strip()]
     assert 0 < len(lines) < 30, len(lines)
     page = views.page("Podsen", "<p>x</p>")
-    # Two inline scripts, no libraries: busy-state on forms, and the install button.
-    assert page.count("<script") == 2 and "src=" not in js + views.INSTALL_JS
-    assert js in page and views.INSTALL_JS in page
+    assert page.count("<script") == 1 and "src=" not in js, "one inline script, no libraries"
     assert "pageshow" in js and "submit" in js and "Working..." in js
-
-
-def test_the_install_script_is_small_and_only_reveals_things():
-    js = views.INSTALL_JS
-    body = js.split("<script>")[1].split("</script>")[0]
-    assert 0 < len([ln for ln in body.splitlines() if ln.strip()]) < 15
-    assert "beforeinstallprompt" in js and ".prompt()" in js
-    # Never touches forms, never fetches, never registers a service worker.
-    for banned in ("form", "fetch(", "serviceWorker", "XMLHttpRequest", "localStorage"):
-        assert banned not in body, banned
 
 
 def test_today_time_buttons_say_finding_your_picks(client, supa, net):
@@ -272,7 +260,7 @@ def test_every_form_is_a_plain_html_form(client, supa, net):
     for name, html in pages.items():
         p = Forms()
         p.feed(html)
-        assert p.scripts == 2 and not p.handlers, f"{name}: no inline handlers, only the two scripts"
+        assert p.scripts == 1 and not p.handlers, f"{name}: no inline handlers, only the one script"
         for f in p.forms:
             method = f["attrs"].get("method", "get").lower()
             assert f["attrs"].get("action", "").startswith("/v2"), (name, f["attrs"])

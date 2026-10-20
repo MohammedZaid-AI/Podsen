@@ -243,8 +243,27 @@ def test_the_app_can_be_installed_on_a_home_screen():
                 '<meta name="theme-color" content="#101114">',
                 '<meta name="apple-mobile-web-app-capable" content="yes">'):
         assert tag in head, tag
-    # The button and the iPhone tip start hidden: without the script nothing shows.
-    html = app_views.page("Podsen", "<p>x</p>")
-    assert '<button type="button" class="install-btn" hidden>' in html
-    assert '<p class="ios-hint" hidden>' in html
-    assert "[hidden] { display: none !important; }" in html
+    # The install button is on the landing page only, never in the app.
+    assert "install-btn" not in app_views.page("Podsen", "<p>x</p>", logged_in=True)
+
+
+def test_landing_page_is_served_at_root_with_the_install_button():
+    client = app_mod.app.test_client()
+    r = client.get("/")
+    assert r.status_code == 200 and r.mimetype == "text/html"
+    html = r.get_data(as_text=True)
+    # Same address as the app, so its install button installs the app.
+    assert '<link rel="manifest" href="/manifest.webmanifest">' in html
+    assert 'class="btn install-btn" href="#install">Install the Podsen app</a>' in html
+    assert 'id="install"' in html and "beforeinstallprompt" in html
+    # Links stay on this site; images come from /assets/.
+    assert "onrender.com" not in html and 'href="/v2/"' in html
+    for asset in ("assets/podsen-logo.png", "assets/favicon.png", "assets/icons/spotify.svg"):
+        assert asset in html and client.get("/" + asset).status_code == 200, asset
+    assert client.get("/assets/../app.py").status_code == 404
+
+
+def test_root_goes_to_the_app_when_there_is_no_landing_copy(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_mod, "LANDING_DIR", tmp_path)
+    r = app_mod.app.test_client().get("/")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/v2/")

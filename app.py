@@ -11,9 +11,10 @@ import os
 import re
 import uuid
 from datetime import date, timedelta
+from pathlib import Path
 from urllib.parse import urlencode
 
-from flask import Flask, redirect, request
+from flask import Flask, redirect, request, send_from_directory
 
 try:  # read .env here too, not only via rank.py: DATABASE_URL and SUPABASE_* live there
     from dotenv import load_dotenv
@@ -129,14 +130,27 @@ def health():
     return app.response_class("ok", mimetype="text/plain")
 
 
+# The landing page (info + "Install the Podsen app") lives in its own project,
+# ../podsen-landing; sync_landing.py copies it here. It is served from the app's own
+# address because a browser can only install the site you are on.
+LANDING_DIR = Path(__file__).resolve().parent / "landing"
+
+
 @app.get("/")
 def index():
-    return redirect("/v2/")
+    if not (LANDING_DIR / "index.html").is_file():  # no landing copy: straight to the app
+        return redirect("/v2/")
+    return send_from_directory(LANDING_DIR, "index.html")
 
 
-# Installs Podsen on a phone's home screen: its own icon, opens full screen. No service
-# worker: installing doesn't need one, and an offline cache could serve stale picks or
-# another user's page.
+@app.get("/assets/<path:name>")
+def landing_assets(name):
+    return send_from_directory(LANDING_DIR / "assets", name)  # refuses paths outside it
+
+
+# Installs Podsen on a phone's home screen: its own icon, opens full screen at /v2/. No
+# service worker: installing doesn't need one, and an offline cache could serve stale
+# picks or another user's page.
 MANIFEST = {
     "name": "Podsen",
     "short_name": "Podsen",
