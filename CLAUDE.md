@@ -95,9 +95,12 @@ are labelled as searches.
   (`app.MANIFEST`: `start_url` `/v2/`, standalone, icons in `static/icon-*.png`; plus
   `related_applications` so Chrome can tell the page it's installed) and `/sw.js`
   (`app.SERVICE_WORKER`): caches NOTHING, only answers a failed GET page load with an offline
-  page; forms, images and redirects pass straight through. The landing script registers it and
-  runs the button: install prompt on Android/desktop Chrome/Edge, Safari steps on iPhone/iPad,
-  "installed" status after; opened from the icon it goes to `/v2/`. The app has no install UI.
+  page; forms, images and redirects pass straight through. The landing page catches
+  `beforeinstallprompt` in <head>; its "Install Podsen" button goes Checking -> Install Podsen
+  (real `prompt()`) -> Installing -> "Podsen installed" only on `appinstalled` (or Chrome's
+  getInstalledRelatedApps). No prompt within 4 s (incognito, in-app browsers, Firefox, already
+  installed) -> no button, just that browser's next step. iPhone/iPad: the button shows a small
+  Safari guide. Opened from the icon it goes to `/v2/`. The app has no install UI.
 - **No client JS in the app except the small progressive enhancement script** (`views.PROGRESSIVE_JS`,
   under 30 lines, no libraries: busy state on submit, no double submits, restored on
   Back), **and every page must work without it.** Forms are plain HTML forms; the

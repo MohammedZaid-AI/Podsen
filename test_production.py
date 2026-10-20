@@ -256,12 +256,20 @@ def test_landing_page_is_served_at_root_with_the_install_button():
     html = r.get_data(as_text=True)
     # Same address as the app, so its install button installs the app.
     assert '<link rel="manifest" href="/manifest.json">' in html
-    assert 'class="btn install-btn" href="#install">Install App</a>' in html
-    assert 'id="install"' in html and 'id="ios-steps" hidden' in html and 'id="install-status" hidden' in html
-    for js in ("beforeinstallprompt", ".prompt()", "appinstalled", 'register("/sw.js")',
-               "getInstalledRelatedApps", "display-mode: standalone"):
+    # One real button, hidden until the script knows what this browser can do.
+    assert '<button type="button" class="btn" id="install-btn" hidden>Install Podsen</button>' in html
+    assert '<p class="install-note" id="install-note" aria-live="polite"></p>' in html
+    assert 'id="ios-steps" hidden' in html
+    # The install prompt is caught in <head>, before the page finishes loading.
+    head = html.split("</head>")[0]
+    assert "beforeinstallprompt" in head and "preventDefault()" in head
+    for js in (".prompt()", "userChoice", "appinstalled", 'register("/sw.js")',
+               "getInstalledRelatedApps", "display-mode: standalone", "Installing", "Checking"):
         assert js in html, js
-    assert 'href="/v2/"' in html  # once installed: open the app here
+    # "Installed" only after the browser says so; no fake install by opening the site.
+    assert html.count("installed()") == 2  # its definition + Chrome's "already installed" answer
+    assert 'addEventListener("appinstalled", installed)' in html  # the browser's confirmation
+    assert ">Open Podsen<" not in html and '<section id="install">' not in html
     for asset in ("assets/podsen-logo.png", "assets/favicon.png", "assets/icons/spotify.svg"):
         assert asset in html and client.get("/" + asset).status_code == 200, asset
     assert client.get("/assets/../app.py").status_code == 404

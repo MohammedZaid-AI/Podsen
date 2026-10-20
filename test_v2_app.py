@@ -1238,7 +1238,7 @@ def test_migration_refuses_without_a_target(tmp_path, monkeypatch):
 def test_home_page_is_the_landing_page_even_when_signed_in(client):
     login(client)
     r = client.get("/")
-    assert r.status_code == 200 and "Install App" in r.get_data(as_text=True)
+    assert r.status_code == 200 and "Install Podsen" in r.get_data(as_text=True)
 
 
 @pytest.mark.parametrize(
