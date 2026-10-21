@@ -222,6 +222,14 @@ addEventListener("beforeinstallprompt", function (e) {
   if (navigator.getInstalledRelatedApps) {  // Chrome: is Podsen already installed?
     navigator.getInstalledRelatedApps().then(function (apps) { if (apps.length) installed(); });
   }
+  // Only the app's own address can install the app (the manifest lives there). On any
+  // other host, say so and where to install, instead of a menu install that fails.
+  fetch("/manifest.json", { method: "HEAD", cache: "no-store" }).then(function (r) {
+    if (r.ok) return;
+    finished = true; guide.hidden = true; show("", false, "");
+    note.innerHTML = 'Podsen can\'t be installed from this address. Install it from ' +
+      '<a href="https://podsen-1.onrender.com/">podsen-1.onrender.com</a>.';
+  }).catch(function () {});
 })();
 </script>
 </body>

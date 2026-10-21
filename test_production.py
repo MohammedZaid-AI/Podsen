@@ -290,3 +290,12 @@ def test_service_worker_caches_nothing_and_only_answers_offline_page_loads():
     assert "caches" not in js and "cache.put" not in js  # nothing stored on the phone
     assert 'e.request.mode !== "navigate" || e.request.method !== "GET"' in js  # forms untouched
     assert "You are offline" in js
+
+
+def test_landing_page_says_when_it_is_on_an_address_that_cannot_install():
+    """Only the app's own address has the manifest. Anywhere else (e.g. a static copy on
+    Vercel) the page must say where to install, not send people to a failing menu install."""
+    html = (app_mod.LANDING_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'fetch("/manifest.json", { method: "HEAD", cache: "no-store" })' in html
+    assert "be installed from this address. Install it from " in html
+    assert 'href="https://podsen-1.onrender.com/"' in html

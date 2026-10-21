@@ -15,5 +15,5 @@ dst = HERE / "landing"
 if not (src / "index.html").is_file():
     sys.exit(f"No index.html in {src}")
 shutil.rmtree(dst, ignore_errors=True)
-shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".git", ".vercel", "node_modules"))
+shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".git", ".vercel", "vercel.json", "node_modules"))
 print(f"Copied {src} -> {dst}")
