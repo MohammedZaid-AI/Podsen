@@ -165,7 +165,15 @@ addEventListener("beforeinstallprompt", function (e) {
   if (matchMedia("(display-mode: standalone)").matches || navigator.standalone === true) {
     location.replace("/v2/"); return;  // opened from the home-screen icon: go to the app
   }
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+  // Diagnostics: every install step goes to the browser console and, as one short event
+  // name, to the app's log (/install-event). No personal data is sent.
+  function log(event, detail) {
+    try { console.info("[podsen install]", event, detail || ""); } catch (e) {}
+    try { if (navigator.sendBeacon) navigator.sendBeacon("/install-event", event + ":" + (detail || "")); } catch (e) {}
+  }
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(function (err) { log("sw-error", err && err.name); });
+  }
 
   var btn = document.getElementById("install-btn"), note = document.getElementById("install-note");
   var guide = document.getElementById("ios-steps"), ua = navigator.userAgent;
@@ -173,7 +181,9 @@ addEventListener("beforeinstallprompt", function (e) {
   var isAndroid = /Android/.test(ua);
   var inApp = /FBAN|FBAV|Instagram|Line\/|WhatsApp|; wv\)/.test(ua);  // in-app browsers can't install
   var macSafari = !isIOS && /Macintosh/.test(ua) && /Version\/[\d.]+ Safari/.test(ua) && !/Chrome|Chromium|Edg\//.test(ua);
-  var firefox = /Firefox\/|FxiOS/.test(ua), finished = false;
+  var firefox = /Firefox\/|FxiOS/.test(ua);
+  var finished = false, installing = false, waitTimer = null, checkTimer = null, promptLogged = false;
+  var WAIT_MS = 90000;  // Android packages the app on Google's servers: allow up to 90 s
 
   function show(label, enabled, text) {
     btn.hidden = !label;
@@ -189,43 +199,97 @@ addEventListener("beforeinstallprompt", function (e) {
     if (firefox) return "To install Podsen, open this page in Chrome or Edge.";
     return "To install Podsen, click the install icon at the right of the address bar, or open this page in Chrome or Edge.";
   }
-  function installed() {  // only called when the browser itself confirms
-    finished = true; guide.hidden = true; show("", false, "");
+  function checkInstalled() {  // Chrome can say whether Podsen is installed on this device
+    if (!navigator.getInstalledRelatedApps) return Promise.resolve(false);
+    return navigator.getInstalledRelatedApps().then(function (apps) { return apps.length > 0; },
+                                                    function () { return false; });
+  }
+  function installed(how) {  // only when the browser itself confirms
+    if (finished) return;
+    finished = true; installing = false; clearTimeout(waitTimer); guide.hidden = true;
+    log(how === "appinstalled" ? "appinstalled" : "already-installed", how);
+    show("", false, "");
     note.innerHTML = '<span class="ok">&#10003; Podsen installed.</span> Open it from your home screen.';
   }
-  function promptReady() { if (!finished && window.podsenPrompt) show("Install Podsen", true, ""); }
-  function noPrompt() { if (!finished && !window.podsenPrompt) show("", false, nextStep()); }
+  function unconfirmed(why) {  // the prompt was accepted, but no confirmation arrived
+    if (finished || !installing) return;
+    installing = false; clearTimeout(waitTimer);
+    checkInstalled().then(function (yes) {
+      if (yes) return installed("check-" + why);
+      log("install-unconfirmed", why);
+      show(window.podsenPrompt ? "Install Podsen" : "", true,
+        "Chrome didn't confirm that Podsen finished installing. Look for Podsen in your app list. " +
+        "If it isn't there, " + (window.podsenPrompt ? "tap Install Podsen to try again."
+          : isAndroid ? "tap Chrome's \u22EE menu, then Install app, to try again." : "try installing again."));
+    });
+  }
+  function promptReady() {
+    if (finished || !window.podsenPrompt) return;
+    clearTimeout(checkTimer);  // the prompt is here: stop waiting for it
+    if (!promptLogged) { promptLogged = true; log("prompt-available"); }
+    if (installing) return unconfirmed("prompt-again");  // offered again: the install did not finish
+    show("Install Podsen", true, "");
+  }
+  function noPrompt(why) {
+    if (finished || installing || window.podsenPrompt) return;
+    log("no-prompt", why);
+    show("", false, nextStep());
+  }
 
   if (isIOS) {
-    if (inApp) show("", false, nextStep());
+    if (inApp) noPrompt("inapp");
     else show("Install Podsen", true, "");
+  } else if (inApp) {
+    noPrompt("inapp");
   } else {
     show("Checking\u2026", false, "");
     promptReady();
     addEventListener("podsen:prompt", promptReady);
-    setTimeout(noPrompt, 4000);  // Chrome/Edge hand over the prompt within a few seconds
+    checkTimer = setTimeout(function () { noPrompt(firefox ? "firefox" : macSafari ? "mac-safari" : "timeout"); }, 4000);
   }
 
   btn.addEventListener("click", function () {
-    if (isIOS) { guide.hidden = !guide.hidden; return; }
+    if (isIOS) { guide.hidden = !guide.hidden; if (!guide.hidden) log("ios-guide"); return; }
     var e = window.podsenPrompt;
-    if (!e) return noPrompt();
+    if (!e) return noPrompt("used");
     window.podsenPrompt = null;  // a prompt can be used once
-    show("Installing\u2026", false, "");
-    e.prompt();
+    clearTimeout(checkTimer);
+    show("Opening\u2026", false, "");
+    function failed(err) {
+      log("prompt-error", err && err.name);
+      show("", false, "Chrome couldn't open its install prompt. " + nextStep());
+    }
+    try {
+      var shown = e.prompt();
+      if (shown && shown.catch) shown.catch(failed);
+      log("prompt-shown");
+    } catch (err) { return failed(err); }
     e.userChoice.then(function (choice) {
-      if (choice.outcome !== "accepted" && !finished) show("", false, "Install cancelled. " + nextStep());
-      // accepted: stay on "Installing..." until the browser fires appinstalled
-    });
+      if (finished) return;
+      if (choice.outcome !== "accepted") {
+        log("dismissed");
+        return show(window.podsenPrompt ? "Install Podsen" : "", true, "Install cancelled. " +
+          (window.podsenPrompt ? "" : nextStep()));
+      }
+      // Accepted is not installed: wait for the browser's appinstalled, at most WAIT_MS.
+      log("accepted");
+      installing = true;
+      show("Installing\u2026", false, "Chrome is installing Podsen. This can take up to a minute.");
+      waitTimer = setTimeout(function () { unconfirmed("timeout"); }, WAIT_MS);
+    }, failed);
   });
-  addEventListener("appinstalled", installed);
-  if (navigator.getInstalledRelatedApps) {  // Chrome: is Podsen already installed?
-    navigator.getInstalledRelatedApps().then(function (apps) { if (apps.length) installed(); });
-  }
+  addEventListener("appinstalled", function () { installed("appinstalled"); });
+  document.addEventListener("visibilitychange", function () {  // back from the notification shade
+    if (document.visibilityState === "visible" && installing) {
+      checkInstalled().then(function (yes) { if (yes) installed("check-visible"); });
+    }
+  });
+  checkInstalled().then(function (yes) { if (yes) installed("check-load"); });
   // Only the app's own address can install the app (the manifest lives there). On any
   // other host, say so and where to install, instead of a menu install that fails.
   fetch("/manifest.json", { method: "HEAD", cache: "no-store" }).then(function (r) {
     if (r.ok) return;
+    log("wrong-host");
     finished = true; guide.hidden = true; show("", false, "");
     note.innerHTML = 'Podsen can\'t be installed from this address. Install it from ' +
       '<a href="https://podsen-1.onrender.com/">podsen-1.onrender.com</a>.';

@@ -267,8 +267,13 @@ def test_landing_page_is_served_at_root_with_the_install_button():
                "getInstalledRelatedApps", "display-mode: standalone", "Installing", "Checking"):
         assert js in html, js
     # "Installed" only after the browser says so; no fake install by opening the site.
-    assert html.count("installed()") == 2  # its definition + Chrome's "already installed" answer
-    assert 'addEventListener("appinstalled", installed)' in html  # the browser's confirmation
+    # Accepting the prompt is not installing: "installed" only on the browser's confirmation,
+    # and "Installing..." gives up after WAIT_MS instead of waiting forever.
+    assert 'log("accepted")' in html and 'installed("appinstalled")' in html
+    assert "var WAIT_MS = 90000" in html and 'unconfirmed("timeout")' in html
+    assert "Chrome didn't confirm that Podsen finished installing" in html
+    assert 'sendBeacon("/install-event"' in html
+    assert 'addEventListener("appinstalled", function () { installed("appinstalled"); })' in html
     assert ">Open Podsen<" not in html and '<section id="install">' not in html
     for asset in ("assets/podsen-logo.png", "assets/favicon.png", "assets/icons/spotify.svg"):
         assert asset in html and client.get("/" + asset).status_code == 200, asset
@@ -299,3 +304,18 @@ def test_landing_page_says_when_it_is_on_an_address_that_cannot_install():
     assert 'fetch("/manifest.json", { method: "HEAD", cache: "no-store" })' in html
     assert "be installed from this address. Install it from " in html
     assert 'href="https://podsen-1.onrender.com/"' in html
+
+
+def test_install_events_are_logged_coarsely_and_unknown_ones_refused(monkeypatch):
+    lines = []
+    monkeypatch.setattr(app_mod._install_log, "info", lambda fmt, *a: lines.append(fmt % a))
+    c = app_mod.app.test_client()
+    ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
+    for event in sorted(app_mod.INSTALL_EVENTS):
+        assert c.post("/install-event", data=f"{event}:Some Detail!", headers={"User-Agent": ua}).status_code == 204
+    assert lines[0] == "event=accepted detail=somedetail platform=android browser=chrome"
+    assert all("Pixel" not in l and "Mozilla" not in l for l in lines)  # never the user agent
+    assert c.post("/install-event", data="<script>:x").status_code == 400
+    assert c.post("/install-event", data="").status_code == 400
+    assert c.get("/install-event").status_code == 405
+    assert len(lines) == len(app_mod.INSTALL_EVENTS)

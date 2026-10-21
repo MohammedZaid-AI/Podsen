@@ -106,13 +106,14 @@ if is_production():
     threading.Thread(target=_warm_db, name="podsen-db-warm", daemon=True).start()
 # One timing line per request (v2/timing.py): path, status, total, db, feeds, Apple.
 v2_timing.install(app)
-_timing_log = logging.getLogger("podsen.timing")
-_timing_log.setLevel(logging.INFO)
-if not _timing_log.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-    _timing_log.addHandler(_h)
-    _timing_log.propagate = False
+for _name in ("podsen.timing", "podsen.install"):  # install: landing page diagnostics
+    _log = logging.getLogger(_name)
+    _log.setLevel(logging.INFO)
+    if not _log.handlers:
+        _h = logging.StreamHandler()
+        _h.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        _log.addHandler(_h)
+        _log.propagate = False
 
 
 def _admin_key_ok() -> bool:
@@ -204,6 +205,40 @@ def service_worker():
     r = app.response_class(SERVICE_WORKER, mimetype="application/javascript")
     r.headers["Cache-Control"] = "no-cache"  # browsers pick up a changed worker at once
     return r
+
+
+# Install diagnostics: the landing page reports each step of "Install Podsen" here, so a
+# failure on someone's phone shows up in the Render logs. One line per event with a
+# coarse platform and browser only: never the full user agent, IP, session or user.
+INSTALL_EVENTS = {
+    "prompt-available", "prompt-shown", "prompt-error", "accepted", "dismissed",
+    "appinstalled", "already-installed", "install-unconfirmed", "no-prompt",
+    "ios-guide", "wrong-host", "sw-error",
+}
+_install_log = logging.getLogger("podsen.install")
+
+
+def _coarse_client(ua: str) -> tuple[str, str]:
+    platform = next((p for k, p in (("Android", "android"), ("iPhone", "ios"), ("iPad", "ios"),
+                                    ("Windows", "windows"), ("Macintosh", "mac"), ("Linux", "linux"))
+                     if k in ua), "other")
+    browser = next((b for k, b in (("SamsungBrowser", "samsung"), ("Edg/", "edge"), ("; wv)", "webview"),
+                                   ("Firefox", "firefox"), ("FxiOS", "firefox"), ("CriOS", "chrome"),
+                                   ("Chrome/", "chrome"), ("Safari/", "safari"))
+                    if k in ua), "other")
+    return platform, browser
+
+
+@app.post("/install-event")
+def install_event():
+    raw = request.get_data(cache=False)[:200].decode("utf-8", "replace")
+    event, _, detail = raw.partition(":")
+    if event not in INSTALL_EVENTS:
+        return "", 400
+    detail = re.sub(r"[^a-z0-9-]", "", detail.lower())[:40]
+    platform, browser = _coarse_client(request.headers.get("User-Agent", ""))
+    _install_log.info("event=%s detail=%s platform=%s browser=%s", event, detail or "-", platform, browser)
+    return "", 204
 
 
 @app.get("/admin")

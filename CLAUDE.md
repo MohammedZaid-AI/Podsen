@@ -104,6 +104,11 @@ are labelled as searches.
   Install only works on `podsen-1.onrender.com`: the landing repo's Vercel deploy has no
   manifest (Chrome: "This app cannot be installed"), so its `vercel.json` redirects there, and
   the page itself says "can't be installed from this address" if `/manifest.json` is missing.
+  Accepted is not installed: after "accepted" the button shows Installing... and waits for
+  `appinstalled` at most 90 s (`WAIT_MS`); then, or if Chrome offers the prompt again, it says
+  the install wasn't confirmed and how to retry. Each step is sent to `POST /install-event`
+  (allow-listed `app.INSTALL_EVENTS`) and logged as `podsen.install event=... platform=...
+  browser=...`: coarse platform/browser only, never the user agent, IP or user.
 - **No client JS in the app except the small progressive enhancement script** (`views.PROGRESSIVE_JS`,
   under 30 lines, no libraries: busy state on submit, no double submits, restored on
   Back), **and every page must work without it.** Forms are plain HTML forms; the
