@@ -211,22 +211,14 @@ addEventListener("beforeinstallprompt", function (e) {
     show("", false, "");
     note.innerHTML = '<span class="ok">&#10003; Podsen installed.</span> Open it from your home screen.';
   }
-  // On Android, Chrome hands the app to Google Play to install, and Play can hold app
-  // downloads until Wi-Fi (seen on a Xiaomi on mobile data: the job waited for an
-  // unmetered network). Chrome on Android reports the connection type.
-  function onMobileData() { return isAndroid && !!navigator.connection && navigator.connection.type === "cellular"; }
-  var WIFI_HINT = "You're on mobile data, and Google Play may wait for Wi-Fi before installing apps. " +
-    "Connect to Wi-Fi, or in the Play Store go to Settings, Network preferences, " +
-    "App download preference, and choose Over any network.";
   function unconfirmed(why) {  // the prompt was accepted, but no confirmation arrived
     if (finished || !installing) return;
     installing = false; clearTimeout(waitTimer);
     checkInstalled().then(function (yes) {
       if (yes) return installed("check-" + why);
-      log("install-unconfirmed", why + (onMobileData() ? "-cellular" : ""));
+      log("install-unconfirmed", why);
       show(window.podsenPrompt ? "Install Podsen" : "", true,
-        "Chrome didn't confirm that Podsen finished installing. " + (onMobileData() ? WIFI_HINT + " " : "") +
-        "Look for Podsen in your app list. " +
+        "Chrome didn't confirm that Podsen finished installing. Look for Podsen in your app list. " +
         "If it isn't there, " + (window.podsenPrompt ? "tap Install Podsen to try again."
           : isAndroid ? "tap Chrome's \u22EE menu, then Install app, to try again." : "try installing again."));
     });
@@ -280,10 +272,9 @@ addEventListener("beforeinstallprompt", function (e) {
           (window.podsenPrompt ? "" : nextStep()));
       }
       // Accepted is not installed: wait for the browser's appinstalled, at most WAIT_MS.
-      log("accepted", onMobileData() ? "cellular" : "");
+      log("accepted");
       installing = true;
-      show("Installing\u2026", false, "Chrome is installing Podsen. This can take up to a minute." +
-        (onMobileData() ? " " + WIFI_HINT : ""));
+      show("Installing\u2026", false, "Chrome is installing Podsen. This can take up to a minute.");
       waitTimer = setTimeout(function () { unconfirmed("timeout"); }, WAIT_MS);
     }, failed);
   });

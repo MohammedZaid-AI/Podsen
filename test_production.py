@@ -269,13 +269,10 @@ def test_landing_page_is_served_at_root_with_the_install_button():
     # "Installed" only after the browser says so; no fake install by opening the site.
     # Accepting the prompt is not installing: "installed" only on the browser's confirmation,
     # and "Installing..." gives up after WAIT_MS instead of waiting forever.
-    assert 'log("accepted", onMobileData()' in html and 'installed("appinstalled")' in html
+    assert 'log("accepted")' in html and 'installed("appinstalled")' in html
     assert "var WAIT_MS = 90000" in html and 'unconfirmed("timeout")' in html
     assert "Chrome didn't confirm that Podsen finished installing" in html
     assert 'sendBeacon("/install-event"' in html
-    # Android installs go through Google Play, which can hold them until Wi-Fi: on mobile
-    # data the page says so (seen on a real phone: Play's job waited for an unmetered network).
-    assert 'navigator.connection.type === "cellular"' in html and "Over any network" in html
     assert 'addEventListener("appinstalled", function () { installed("appinstalled"); })' in html
     assert ">Open Podsen<" not in html and '<section id="install">' not in html
     for asset in ("assets/podsen-logo.png", "assets/favicon.png", "assets/icons/spotify.svg"):
