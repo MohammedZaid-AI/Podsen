@@ -153,9 +153,12 @@ are labelled as searches.
 - **Trending:** Apple's top-25 chart per country (`?country=in|us|gb`, anything else
   falls back to India), cached 12 h in `trending_cache`. The chart has no feedUrl, so
   one batched lookup marks shows with no public feed (listed, no checkbox). Shown on
-  Today while the user has fewer than 3 shows, and on My shows. "Add selected" posts
-  only iTunes ids to `/v2/shows/add-many`; at 3+ shows it lands on Today. A failed
+  Today while the user has no shows yet, and on My shows. "Add selected" posts
+  only iTunes ids to `/v2/shows/add-many`; once they have a show it lands on Today. A failed
   load says "Could not load trending shows right now" and is never cached.
+- **One show is enough** (`app_views.MIN_SHOWS = 1`): zero shows is blocked with "Add a
+  show you follow"; with one show the same-show fallback fills the time from it. If every
+  show's feed fails, the results page says nothing could be picked (never "inbox zero").
 - **One add path:** `_add_shows()` in `web.py` (single Add and Add selected) looks up
   every feed URL from Apple; the form's own values are never stored.
 - **Pick rule (`newest_first_varied`):** newest-first fill, at most one episode per

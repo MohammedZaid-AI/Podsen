@@ -54,6 +54,22 @@ def test_one_per_show_across_many_shows():
     assert sorted(p["show"] for p in picks) == ["A", "B", "C", "D"]
 
 
+def test_a_single_show_fills_the_time_with_its_own_newest_episodes():
+    """One show is enough to use Podsen. Pass 1 takes its newest episode that fits; with
+    no other show, the same-show fallback adds more of its episodes that still fit."""
+    backlog = [ep("A1", "A", 15, "2026-10-20"), ep("A2", "A", 20, "2026-10-18"), ep("A3", "A", 40, "2026-10-15")]
+    picks, skips = engine.pick(backlog, 40)
+    assert ids(picks) == ["A1", "A2"] and ids(skips) == ["A3"]
+    assert sum(p["duration_min"] for p in picks) <= 40
+
+
+def test_a_single_show_with_one_fitting_episode_gives_one_pick():
+    backlog = [ep("A1", "A", 25, "2026-10-20"), ep("A2", "A", 50, "2026-10-18")]
+    picks, skips = engine.pick(backlog, 30)
+    assert ids(picks) == ["A1"] and ids(skips) == ["A2"]
+    assert engine.pick([], 30) == ([], [])
+
+
 def test_shows_are_told_apart_by_itunes_id_then_name():
     a = {"id": "x1", "show": "Same Name", "itunes_id": "1", "duration_min": 10, "released": "2026-10-02"}
     b = {"id": "x2", "show": "Same Name", "itunes_id": "2", "duration_min": 10, "released": "2026-10-01"}

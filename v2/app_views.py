@@ -15,7 +15,7 @@ from views import page as base_page
 SPOTIFY_SEARCH = "https://open.spotify.com/search/"
 YOUTUBE_SEARCH = "https://www.youtube.com/results?search_query="
 AMAZON_MUSIC_SEARCH = "https://music.amazon.com/search/"
-MIN_SHOWS = 3
+MIN_SHOWS = 1  # one show is enough: someone behind on a single show still gets picks
 SKIPS_SHOWN = 10
 
 _STYLE = """<style>
@@ -79,6 +79,11 @@ _STYLE = """<style>
     .standfirst { font-size: 19px; }
   }
 </style>"""
+
+
+def _count(n, word: str) -> str:
+    """"1 show", "2 shows": counts on these pages are often 1 now that one show is enough."""
+    return f"{esc(n)} {word}{'' if n == 1 else 's'}"
 
 
 def _csrf(token: str) -> str:
@@ -217,8 +222,8 @@ def shows_page(my_shows: list[dict], query: str = "", results=None, error: str |
     have = {s["itunes_id"] for s in my_shows}
     n = len(my_shows)
     if n < MIN_SHOWS:
-        need = (f'<p class="warn">Add at least {MIN_SHOWS} shows to get picks '
-                f"&mdash; you have {n}. Search or tick trending shows below.</p>")
+        need = ('<p class="warn">Add a show you follow to get picks. '
+                "Search or tick trending shows below.</p>")
     else:
         need = '<p class="next"><a class="btn" href="/v2/today">Pick episodes for today &rarr;</a></p>'
 
@@ -262,8 +267,7 @@ def today_form(n_shows: int, error: str | None = None, csrf: str = "",
         trend = (trending_section(trending, have or set(), csrf, "today",
                                   f"Trending in {trending['label']}") if trending else "")
         return f"""{_note(note)}{_error(error)}
-<p class="meta">Pick at least {MIN_SHOWS} shows you follow to get started &mdash; you have
-{esc(n_shows)}. Tick them below, or search for yours.</p>
+<p class="meta">Add a show you follow to get started. Tick one below, or search for yours.</p>
 {trend}
 <p style="margin-top:20px"><a class="btn secondary" href="/v2/shows"
   style="background:#2a2c31;color:#e9e9ec">Add shows</a></p>"""
@@ -283,7 +287,7 @@ def today_form(n_shows: int, error: str | None = None, csrf: str = "",
   <p class="busy-note" hidden aria-live="polite"></p>
 </form>
 <p class="meta" style="margin-top:20px">Tap a time. Podsen picks the newest episodes from your
-{esc(n_shows)} shows (last 30 days) that fit it, and lists the rest as safe to skip.
+{_count(n_shows, "show")} (last 30 days) that fit it, and lists the rest as safe to skip.
 First run can take a few seconds while feeds load.</p>"""
 
 
@@ -312,11 +316,17 @@ def _apple_link(ep: dict) -> str:
     return ""
 
 
-def failed_note(failed) -> str:
+def failed_note(failed, total_shows: int | None = None) -> str:
+    """Say which shows failed. When every show failed (common with a single show) there
+    are no "other shows" to pick from, so say that instead."""
     if not failed:
         return ""
     n = len(failed)
     items = "; ".join(f"{f['show']} ({f['error']})" for f in failed)
+    if total_shows is not None and n >= total_shows:
+        whose = "your show" if n == 1 else f"any of your {n} shows"
+        return (f'<p class="warn">Could not load {whose}: {esc(items)}. Nothing could be '
+                "picked this time. Try again in a moment.</p>")
     return (
         f'<p class="warn">Could not load {n} show{"s" if n != 1 else ""}: {esc(items)}. '
         "These picks come from your other shows only.</p>"
@@ -404,8 +414,14 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
     if picks:
         picks_html = "".join(_pick(run["id"], x, x["id"] in heard, csrf) for x in picks)
     elif not skips:
-        picks_html = (f"<p>No unheard episodes from the last 30 days in your shows. "
-                      "Inbox zero &mdash; nice.</p>")
+        failed = p.get("failed") or []
+        if failed and len(failed) >= p["shows"]:
+            picks_html = ""  # nothing loaded: failed_note above says so; never "inbox zero"
+        elif failed:
+            picks_html = "<p>No unheard episodes from the last 30 days in the shows that loaded.</p>"
+        else:
+            picks_html = (f"<p>No unheard episodes from the last 30 days in your shows. "
+                          "Inbox zero &mdash; nice.</p>")
     else:
         shortest = min(x["duration_min"] for x in skips)
         picks_html = (f'<p class="warn">Nothing fits {esc(budget)} minutes. The shortest '
@@ -438,9 +454,9 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
                        f'{engine.LONGER_EXTRA_MIN} more minutes.</p>'
                        + "".join(_pick(run["id"], x, x["id"] in heard, csrf, longer=True) for x in longer))
 
-    return f"""<p class="meta">{esc(p['backlog_size'])} recent unheard episodes across
-{esc(p['shows'])} shows &middot; about {esc(used)} of {esc(budget)} min used</p>
-{failed_note(p.get('failed'))}
+    return f"""<p class="meta">{_count(p['backlog_size'], "recent unheard episode")} across
+{_count(p['shows'], "show")} &middot; about {esc(used)} of {esc(budget)} min used</p>
+{failed_note(p.get('failed'), p['shows'])}
 <h2>Worth it now</h2>
 {picks_html}
 {unused}

@@ -459,13 +459,48 @@ def test_feed_url_comes_from_apple_not_from_the_form(client):
     assert db.list_shows(uid)[0]["feed_url"] == "https://feeds.example/b"
 
 
-def test_three_shows_are_required(client):
+def test_zero_shows_is_blocked_with_a_clear_message(client):
     login(client)
-    add(client, "101", "102")
-    assert "Add at least 3 shows" in client.get("/v2/shows").get_data(as_text=True)
+    assert "Add a show you follow to get picks" in client.get("/v2/shows").get_data(as_text=True)
     today = client.get("/v2/today").get_data(as_text=True)
-    assert "Pick at least 3 shows" in today and "you have 2." in " ".join(today.split())
-    assert client.post("/v2/today", data={"minutes": "30"}).status_code == 400
+    assert "Add a show you follow to get started" in today and "Trending in" in today
+    assert "How much time do you have" not in today
+    r = client.post("/v2/today", data={"minutes": "30"})
+    assert r.status_code == 400 and "Add a show you follow to get started" in r.get_data(as_text=True)
+
+
+def test_one_show_is_enough_to_get_picks(client):
+    """Someone behind on a single show is no longer blocked. With one show the engine's
+    same-show fallback fills the time with that show's newest episodes that fit."""
+    login(client)
+    add(client, "102")  # Second Show: 12, 33 and 61 min, all in the last 30 days
+    shows = client.get("/v2/shows").get_data(as_text=True)
+    assert 'href="/v2/today">Pick episodes for today' in shows and "Add a show you follow" not in shows
+    today = " ".join(client.get("/v2/today").get_data(as_text=True).split())
+    assert "How much time do you have" in today and "Trending in" not in today
+    assert "from your 1 show (last 30 days)" in today and "1 shows" not in today
+
+    run, run_id = run_today(client, 60)
+    assert [x["id"] for x in run["payload"]["picks"]] == ["b1", "b2"], "12 + 33 = 45 of 60 min"
+    assert [x["id"] for x in run["payload"]["skips"]] == ["b3"], "61 min does not fit"
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert "3 recent unheard episodes across 1 show &middot;" in html and "1 shows" not in html
+
+    _, run_id = run_today(client, 20)
+    html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    picks = html.split("Worth it now")[1].split("Was this worth your time?")[0]
+    assert "B one" in picks and "B two" not in picks, "20 min: one pick"
+
+
+def test_when_the_only_show_fails_nothing_claims_inbox_zero(client, net):
+    net["fail"].add("https://feeds.example/b")
+    login(client)
+    add(client, "102")
+    _, run_id = run_today(client, 30)
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert ("Could not load your show: Second Show (TimeoutError: feed timed out). "
+            "Nothing could be picked this time. Try again in a moment.") in html
+    assert "Inbox zero" not in html and "other shows" not in html
 
 
 # --- trending suggestions -----------------------------------------------------------------
@@ -493,9 +528,9 @@ def test_suggestions_render_on_today_for_a_new_user(client):
     assert 'href="/v2/today?country=us"' in html and 'href="/v2/today?country=gb"' in html
 
 
-def test_today_hides_suggestions_once_there_are_three_shows(client):
+def test_today_hides_suggestions_once_there_is_a_show(client):
     login(client)
-    add(client, "101", "102", "103")
+    add(client, "101")
     html = client.get("/v2/today").get_data(as_text=True)
     assert "Trending in" not in html and "How much time do you have" in html
 
@@ -512,9 +547,10 @@ def test_my_shows_has_a_trending_section_under_the_search_box(client):
 def test_already_added_shows_are_hidden(client):
     login(client)
     add(client, "102")
-    for page in ("/v2/today", "/v2/shows"):
-        form = _trending_form(client.get(page).get_data(as_text=True))
-        assert 'value="101"' in form and 'value="102"' not in form, page
+    form = _trending_form(client.get("/v2/shows").get_data(as_text=True))
+    assert 'value="101"' in form and 'value="102"' not in form
+    # With a show, Today goes straight to "How much time?": no suggestions there.
+    assert "Trending in" not in client.get("/v2/today").get_data(as_text=True)
 
 
 def test_a_show_with_no_public_feed_has_no_checkbox(client):
@@ -538,15 +574,26 @@ def test_add_selected_adds_several_shows_and_goes_to_today(client):
     assert "Added 3 shows." in html and "How much time do you have" in html
 
 
-def test_add_selected_below_three_stays_and_says_what_happened(client):
+def test_add_selected_with_one_show_added_lands_on_today(client):
     uid = login(client)
     r = client.post("/v2/shows/add-many",
                     data={"itunes_id": ["101", "105"], "back": "shows", "country": "us"})
     loc = r.headers["Location"]
-    assert r.status_code == 302 and loc.startswith("/v2/shows?") and "country=us" in loc
+    assert r.status_code == 302 and loc.startswith("/v2/today?"), "one show is enough to pick"
     assert [s["itunes_id"] for s in db.list_shows(uid)] == ["101"], "the no-feed show is not added"
     html = client.get(loc).get_data(as_text=True)
     assert "Added 1 show." in html and "1 had no public feed" in html
+    assert "How much time do you have" in html
+
+
+def test_add_selected_with_nothing_added_stays_and_says_what_happened(client):
+    uid = login(client)
+    r = client.post("/v2/shows/add-many", data={"itunes_id": ["105"], "back": "shows", "country": "us"})
+    loc = r.headers["Location"]
+    assert r.status_code == 302 and loc.startswith("/v2/shows?") and "country=us" in loc
+    assert db.list_shows(uid) == []
+    html = client.get(loc).get_data(as_text=True)
+    assert "1 had no public feed" in html and "Add a show you follow to get picks" in html
 
 
 def test_add_selected_needs_csrf_and_a_ticked_show(client):
