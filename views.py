@@ -26,7 +26,8 @@ document.addEventListener("submit", function (e) {
   f.dataset.busy = "1";
   if (note && f.dataset.busyNote) { note.textContent = f.dataset.busyNote; note.hidden = false; }
   if (b && !(note && f.dataset.busyNote)) {
-    b.style.width = b.offsetWidth + "px"; b.dataset.label = b.textContent; b.textContent = "Working...";
+    b.style.width = b.offsetWidth + "px"; b.style.whiteSpace = "nowrap";  // overflow sideways, never wrap
+    b.dataset.label = b.textContent; b.textContent = "Working...";
     if (b.scrollWidth > b.clientWidth) b.textContent = b.dataset.label;  // too narrow: keep the label
   }
   if (b) b.classList.add("busy");
@@ -37,7 +38,7 @@ window.addEventListener("pageshow", function () {
     delete f.dataset.busy;
     f.querySelectorAll("button").forEach(function (x) {
       x.disabled = false; x.classList.remove("busy");
-      if (x.dataset.label) { x.textContent = x.dataset.label; delete x.dataset.label; x.style.width = ""; }
+      if (x.dataset.label) { x.textContent = x.dataset.label; delete x.dataset.label; x.style.width = x.style.whiteSpace = ""; }
     });
     var note = f.querySelector(".busy-note");
     if (note) note.hidden = true;

@@ -404,7 +404,7 @@ def feedback(user):
         return redirect("/v2/today")
     if verdict in VERDICTS:
         db.save_feedback(r, verdict)
-    return redirect(f"/v2/run/{r['id']}")
+    return redirect(f"/v2/run/{r['id']}#feedback")  # back to the question, not the top
 
 
 @bp.post("/feedback/note")
@@ -417,4 +417,4 @@ def feedback_note(user):
     if r is None:
         return redirect("/v2/today")
     db.save_note(r, request.form.get("note") or "")
-    return redirect(f"/v2/run/{r['id']}")
+    return redirect(f"/v2/run/{r['id']}#feedback")

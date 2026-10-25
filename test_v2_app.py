@@ -746,7 +746,9 @@ def test_feedback_is_saved_with_picks_budget_and_engine(client):
     assert db.all_feedback() == [], "only yes / somewhat / no"
 
     r = client.post("/v2/feedback", data={"run": run_id, "verdict": "somewhat"})
-    assert r.status_code == 302
+    # Back to the question (#feedback), not the top of a long results page.
+    assert r.status_code == 302 and r.headers["Location"].endswith(f"/v2/run/{run_id}#feedback")
+    assert '<h2 id="feedback">Was this worth your time?</h2>' in client.get(f"/v2/run/{run_id}").get_data(as_text=True)
     (fb,) = db.all_feedback()
     assert fb["verdict"] == "somewhat" and fb["budget"] == 45 and fb["engine"] == "newest_first_varied"
     assert [p["id"] for p in json.loads(fb["picks"])] == [p["id"] for p in run["payload"]["picks"]]
@@ -804,7 +806,7 @@ def test_feedback_note_is_stored_read_back_escaped_and_capped(client, monkeypatc
 
     note = '<script>alert("x")</script> Fewer news shows & more interviews. ' + "z" * 600
     r = client.post("/v2/feedback/note", data={"run": run_id, "note": note})
-    assert r.status_code == 302 and r.headers["Location"].endswith(f"/v2/run/{run_id}")
+    assert r.status_code == 302 and r.headers["Location"].endswith(f"/v2/run/{run_id}#feedback")
     (fb,) = db.all_feedback()  # attached to the same feedback row, not a new one
     assert fb["verdict"] == "somewhat" and fb["note"] == note[:db.NOTE_MAX] and len(fb["note"]) == 500
 

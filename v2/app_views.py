@@ -444,7 +444,7 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
 <h2>Worth it now</h2>
 {picks_html}
 {unused}
-<h2>Was this worth your time?</h2>
+<h2 id="feedback">Was this worth your time?</h2>
 {ask}
 {longer_html}
 <h2>Safe to skip</h2>
