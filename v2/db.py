@@ -96,7 +96,12 @@ feedback = Table(
     Column("budget", Integer, nullable=False),
     Column("engine", String, nullable=False),
     Column("picks", Text, nullable=False),
+    # Optional free text sent after the verdict ("Anything you'd change?"). Untrusted:
+    # always escaped when shown. Added after launch: live Postgres needs the ALTER TABLE
+    # in v2/supabase_setup.sql.
+    Column("note", Text, nullable=True),
 )
+NOTE_MAX = 500  # characters; longer notes are cut, never rejected
 USER_TABLES = (feedback, runs, heard, shows)  # deletion order: children first
 
 
@@ -306,8 +311,9 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
     if run_id:
         own = (runs.c.id == run_id) & (runs.c.user_id == user_id)
         extra += [select(runs.c[col]).where(own).scalar_subquery().label(f"r_{col}") for col in _RUN_COLS]
-        extra.append(select(feedback.c.verdict).where(feedback.c.run_id == run_id)
-                     .order_by(feedback.c.id.desc()).limit(1).scalar_subquery().label("r_verdict"))
+        for col in ("verdict", "note"):  # the latest feedback row's verdict and note
+            extra.append(select(feedback.c[col]).where(feedback.c.run_id == run_id)
+                         .order_by(feedback.c.id.desc()).limit(1).scalar_subquery().label(f"r_{col}"))
     if trending_country:
         for col in ("fetched", "payload"):
             extra.append(select(trending_cache.c[col]).where(trending_cache.c.country == trending_country)
@@ -338,6 +344,7 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
                                      {"id": run_id, "user_id": user_id,
                                       **{col: first[f"r_{col}"] for col in _RUN_COLS}})
             memo[("verdict", run_id)] = first["r_verdict"]
+            memo[("note", run_id)] = first["r_note"]
         if trending_country:
             memo[("cache", "trending", trending_country)] = (
                 None if first["t_payload"] is None else (first["t_fetched"], first["t_payload"]))
@@ -578,25 +585,33 @@ def save_run(user_id: str, budget: int, engine_name: str, payload: dict) -> str:
 
 def get_run(run_id: str, user_id: str):
     """Only the owner's run; anyone else gets None, same as a missing run. Its latest
-    feedback verdict comes back in the same query (and is memoised for
-    latest_feedback)."""
+    feedback verdict and note come back in the same query (and are memoised for
+    latest_feedback / latest_note)."""
     memo = _memo()
     if ("run", run_id) in memo:  # brought along by the request's first query
         r = memo[("run", run_id)]
         return None if r is None else {**r, "payload": json.loads(r["payload"])}
-    verdict = (select(feedback.c.verdict).where(feedback.c.run_id == runs.c.id)
-               .order_by(feedback.c.id.desc()).limit(1).scalar_subquery())
+    latest = {col: (select(feedback.c[col]).where(feedback.c.run_id == runs.c.id)
+                    .order_by(feedback.c.id.desc()).limit(1).scalar_subquery())
+              for col in ("verdict", "note")}
     with _tx() as c:
-        row = c.execute(select(runs, verdict.label("latest_verdict"))
+        row = c.execute(select(runs, latest["verdict"].label("latest_verdict"),
+                               latest["note"].label("latest_note"))
                         .where(runs.c.id == run_id, runs.c.user_id == user_id)).first()
     if row is None:
         return None
     r = dict(row._mapping)
     _memo()[("verdict", run_id)] = r.pop("latest_verdict")
+    _memo()[("note", run_id)] = r.pop("latest_note")
     return {**r, "payload": json.loads(r["payload"])}
 
 
-def save_feedback(run: dict, verdict: str) -> None:
+def _clean_note(note) -> str | None:
+    note = (note or "").strip()[:NOTE_MAX]
+    return note or None
+
+
+def save_feedback(run: dict, verdict: str, note: str | None = None) -> None:
     # Copied from the stored run, never from the form: what we record is what was shown.
     picks = [
         {"id": p["id"], "title": p["title"], "show": p["show"], "duration_min": p["duration_min"]}
@@ -606,8 +621,25 @@ def save_feedback(run: dict, verdict: str) -> None:
         c.execute(feedback.insert().values(
             run_id=run["id"], user_id=run["user_id"], ts=time.time(), verdict=verdict,
             budget=run["budget"], engine=run["engine"], picks=json.dumps(picks, ensure_ascii=False),
+            note=_clean_note(note),
         ))
     _memo().pop(("verdict", run["id"]), None)
+    _memo().pop(("note", run["id"]), None)
+
+
+def save_note(run: dict, note: str) -> bool:
+    """Attach a note to this run's latest feedback (the verdict just given). False when
+    there is no verdict yet or the note is empty: a note never stands alone."""
+    note = _clean_note(note)
+    if note is None:
+        return False
+    latest_id = (select(func.max(feedback.c.id))
+                 .where(feedback.c.run_id == run["id"], feedback.c.user_id == run["user_id"])
+                 .scalar_subquery())
+    with _tx() as c:
+        done = c.execute(feedback.update().where(feedback.c.id == latest_id).values(note=note)).rowcount
+    _memo().pop(("note", run["id"]), None)
+    return bool(done)
 
 
 def latest_feedback(run_id: str):
@@ -618,6 +650,16 @@ def latest_feedback(run_id: str):
         row = c.execute(select(feedback.c.verdict).where(feedback.c.run_id == run_id)
                         .order_by(feedback.c.id.desc()).limit(1)).first()
     return row.verdict if row else None
+
+
+def latest_note(run_id: str):
+    memo = _memo()
+    if ("note", run_id) in memo:
+        return memo[("note", run_id)]
+    with _tx() as c:
+        row = c.execute(select(feedback.c.note).where(feedback.c.run_id == run_id)
+                        .order_by(feedback.c.id.desc()).limit(1)).first()
+    return row.note if row else None
 
 
 def all_runs() -> list[dict]:

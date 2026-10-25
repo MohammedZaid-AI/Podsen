@@ -778,6 +778,54 @@ def test_feeds_are_cached_for_an_hour(client, net, monkeypatch):
     assert len(net["fetches"]) == 6
 
 
+def test_feedback_note_is_stored_read_back_escaped_and_capped(client, monkeypatch):
+    login(client)
+    add(client, "101", "102", "103")
+    _, run_id = run_today(client, 30)
+    page = lambda: client.get(f"/v2/run/{run_id}").get_data(as_text=True)  # noqa: E731
+
+    # No verdict yet: no note box, and a note on its own is not saved.
+    assert 'action="/v2/feedback/note"' not in page()
+    client.post("/v2/feedback/note", data={"run": run_id, "note": "too early"})
+    assert db.all_feedback() == []
+
+    # One click still saves the verdict; then the optional box appears under "Thanks".
+    client.post("/v2/feedback", data={"run": run_id, "verdict": "somewhat"})
+    html = page()
+    assert "you said &ldquo;somewhat&rdquo;" in html
+    assert 'action="/v2/feedback/note"' in html and "Anything you'd change? (optional)" in html
+    assert f'name="run" value="{run_id}"' in html.split('action="/v2/feedback/note"')[1]
+
+    # Without the CSRF token the note is refused.
+    assert client.c.post("/v2/feedback/note", data={"run": run_id, "note": "x"}).status_code == 400
+    # An empty box changes nothing.
+    client.post("/v2/feedback/note", data={"run": run_id, "note": "   "})
+    assert db.all_feedback()[0]["note"] is None
+
+    note = '<script>alert("x")</script> Fewer news shows & more interviews. ' + "z" * 600
+    r = client.post("/v2/feedback/note", data={"run": run_id, "note": note})
+    assert r.status_code == 302 and r.headers["Location"].endswith(f"/v2/run/{run_id}")
+    (fb,) = db.all_feedback()  # attached to the same feedback row, not a new one
+    assert fb["verdict"] == "somewhat" and fb["note"] == note[:db.NOTE_MAX] and len(fb["note"]) == 500
+
+    # Read back on the page, escaped; the box is replaced by the note.
+    html = page()
+    assert "<script>alert" not in html
+    assert "Your note: &ldquo;&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; Fewer news shows &amp; more" in html
+    assert 'action="/v2/feedback/note"' not in html
+
+    # /admin includes it (JSON, so the text stays data).
+    monkeypatch.setenv("ADMIN_KEY", "s3cret-admin-key-for-notes")
+    data = client.get("/admin?key=s3cret-admin-key-for-notes").get_json()
+    assert data["feedback"][0]["note"] == note[:db.NOTE_MAX]
+
+    # Someone else can't add or overwrite a note on this run.
+    client.post("/v2/logout")
+    login(client, "other@example.com")
+    client.post("/v2/feedback/note", data={"run": run_id, "note": "not mine"})
+    assert db.all_feedback()[0]["note"] == note[:db.NOTE_MAX]
+
+
 def test_another_users_run_is_not_found(client):
     login(client)
     add(client, "101", "102", "103")

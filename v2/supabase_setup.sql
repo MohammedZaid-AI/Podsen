@@ -95,10 +95,16 @@ CREATE TABLE IF NOT EXISTS feedback (
 	budget INTEGER NOT NULL, 
 	engine VARCHAR NOT NULL, 
 	picks TEXT NOT NULL, 
+	note TEXT, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(run_id) REFERENCES runs (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id)
 );
+
+-- Added after launch: the optional feedback note. For a database created before it,
+-- this adds the column; on a fresh one it does nothing. Run it BEFORE deploying code
+-- that reads feedback.note.
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS note TEXT;
 
 CREATE INDEX IF NOT EXISTS ix_feedback_run_id ON feedback (run_id);
 

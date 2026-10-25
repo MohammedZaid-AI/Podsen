@@ -7,6 +7,7 @@ URLs all come from public feeds or Apple's API and are untrusted.
 from urllib.parse import quote, quote_plus, urlparse
 
 from v2 import engine
+from v2.db import NOTE_MAX
 from views import esc
 from views import page as base_page
 
@@ -52,6 +53,9 @@ _STYLE = """<style>
   .err { border: 1px solid #6b2a33; background: #2a1418; color: #f1c4cb;
     border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 14px; }
   .ok { color: #6fd08c; }
+  .note-form { margin: 12px 0 0; }
+  .note-form textarea { margin-top: 2px; }
+  .sent-note { white-space: pre-wrap; margin: 8px 0 0; }
   .links a { transition: filter .12s, transform .06s; }
   .links a:hover { filter: brightness(1.25); border-color: #3a3d44; }
   .links a:active { filter: brightness(.85); transform: translateY(1px) scale(.98); }
@@ -379,7 +383,20 @@ def _skip(ep: dict) -> str:
     )
 
 
-def results(run: dict, heard: set, verdict: str | None, csrf: str = "") -> str:
+def _note_box(run_id: str, note: str | None, csrf: str) -> str:
+    """Under the "Thanks" line: the optional note, or the note already sent (escaped:
+    it is untrusted user text)."""
+    if note:
+        return f'<p class="meta sent-note">Your note: &ldquo;{esc(note)}&rdquo;</p>'
+    return f"""<form method="post" action="/v2/feedback/note" class="note-form">{_csrf(csrf)}
+  <input type="hidden" name="run" value="{esc(run_id)}">
+  <label class="field"><span>Anything you'd change? (optional)</span>
+    <textarea name="note" rows="3" maxlength="{NOTE_MAX}"></textarea></label>
+  <button class="secondary">Send</button>
+</form>"""
+
+
+def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: str | None = None) -> str:
     p = run["payload"]
     picks, skips, budget = p["picks"], p["skips"], run["budget"]
     used = sum(x["duration_min"] for x in picks)
@@ -401,7 +418,8 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "") -> str:
                        + "".join(_skip(x) for x in tail) + "</details>")
 
     if verdict:
-        ask = f'<p class="ok">Thanks &mdash; you said &ldquo;{esc(verdict)}&rdquo;.</p>'
+        ask = (f'<p class="ok">Thanks &mdash; you said &ldquo;{esc(verdict)}&rdquo;.</p>'
+               + _note_box(run["id"], note, csrf))
     else:
         ask = f"""<form method="post" action="/v2/feedback" class="row">{_csrf(csrf)}
   <input type="hidden" name="run" value="{esc(run['id'])}">
@@ -445,7 +463,8 @@ def privacy() -> str:
   <li><strong>The shows you chose</strong> (name and public feed address).</li>
   <li><strong>Episodes you marked as heard</strong>, so they stop being suggested.</li>
   <li><strong>Each set of picks we showed you and your feedback on it</strong>
-      (yes / somewhat / no, the time you had, and which episodes were picked),
+      (yes / somewhat / no, any note you choose to add, the time you had, and which
+      episodes were picked),
       to measure whether the picks are any good.</li>
 </ul>
 <p><strong>Where it is stored:</strong> with <a href="https://supabase.com" target="_blank"

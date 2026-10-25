@@ -376,7 +376,8 @@ def run(user, run_id):
     r = _run_or_404(user, run_id)
     if r is None:
         return _page("Podsen", '<p>That run was not found. <a href="/v2/today">Start over</a></p>', 404, True)
-    body = app_views.results(r, db.heard_ids(user["id"]), db.latest_feedback(r["id"]), _csrf_token())
+    body = app_views.results(r, db.heard_ids(user["id"]), db.latest_feedback(r["id"]), _csrf_token(),
+                             note=db.latest_note(r["id"]))
     return _page("Podsen · today", body, logged_in=True)
 
 
@@ -403,4 +404,17 @@ def feedback(user):
         return redirect("/v2/today")
     if verdict in VERDICTS:
         db.save_feedback(r, verdict)
+    return redirect(f"/v2/run/{r['id']}")
+
+
+@bp.post("/feedback/note")
+@login_required
+def feedback_note(user):
+    """The optional "Anything you'd change?" text, sent after the verdict. Same checks as
+    /feedback: signed in, CSRF (before_request), and only the user's own run. It attaches
+    to that run's latest verdict; with no verdict yet, or an empty box, nothing is saved."""
+    r = _run_or_404(user, request.form.get("run"))
+    if r is None:
+        return redirect("/v2/today")
+    db.save_note(r, request.form.get("note") or "")
     return redirect(f"/v2/run/{r['id']}")
