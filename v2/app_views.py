@@ -426,11 +426,11 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "") -> str:
 <h2>Worth it now</h2>
 {picks_html}
 {unused}
+<h2>Was this worth your time?</h2>
+{ask}
 {longer_html}
 <h2>Safe to skip</h2>
 {skips_html or '<p class="meta">Nothing else in your recent backlog.</p>'}
-<h2>Was this worth your time?</h2>
-{ask}
 <p style="margin-top:24px"><a class="btn" href="/v2/today">Pick again</a></p>"""
 
 
