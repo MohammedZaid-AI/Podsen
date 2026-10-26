@@ -12,13 +12,14 @@ from functools import wraps
 
 from flask import Blueprint, current_app, redirect, request, session
 
-from v2 import app_views, auth, backlog, db, engine, itunes, links, refresh, trending
+from v2 import app_views, auth, backlog, db, engine, itunes, links, preferences, refresh, trending
 
 bp = Blueprint("v2", __name__, url_prefix="/v2")
 
 VERDICTS = ("yes", "somewhat", "no")
 RUN_FIELDS = (
     "id", "title", "show", "duration_min", "released", "audio_url", "apple_url", "apple_episode_url",
+    "raw_min",  # the episode's own length; duration_min is the time to hear it at the chosen speed
 )
 
 
@@ -174,7 +175,8 @@ def privacy():
 @bp.get("/account")
 @login_required
 def account(user):
-    return _page("Podsen · account", app_views.account_page(user["email"], csrf=_csrf_token()), logged_in=True)
+    body = app_views.account_page(user["email"], csrf=_csrf_token(), prefs=db.get_preferences(user["id"]))
+    return _page("Podsen · account", body, logged_in=True)
 
 
 @bp.post("/account/delete")
@@ -221,6 +223,11 @@ def _shows_page(user, query="", results=None, error=None, status=200, note=None)
 def _today_page(user, error=None, status=200, note=None):
     shows_list = db.list_shows(user["id"])
     n = len(shows_list)
+    if n >= app_views.MIN_SHOWS and db.get_preferences(user["id"]) is None:
+        # Once, before the first triage: three optional questions, with "Skip for now".
+        body = app_views.added_line(note) + app_views.preferences_form(
+            preferences.DEFAULTS, _csrf_token(), first_time=True)
+        return _page("Podsen · preferences", body, status, logged_in=True)
     trend = None
     if n < app_views.MIN_SHOWS:  # only a new user needs suggestions here
         trend = trending.get(request.args.get("country") or request.form.get("country"))
@@ -341,7 +348,11 @@ def today_run(user):
         return _today_page(user, error="Time must be a whole number of minutes from 1 to 600.", status=400)
 
     bl = backlog.build(user["id"])
-    picks, skips = engine.pick(bl["episodes"], minutes)
+    prefs = db.get_preferences(user["id"]) or preferences.DEFAULTS
+    speed = prefs["listening_speed"]
+    # Speed changes the time math only: the rule picker gets each episode's listening time
+    # at that speed (rounded up), so its budget check stays a hard cap. Its logic is unchanged.
+    picks, skips = engine.pick(preferences.at_speed(bl["episodes"], speed), minutes)
     longer = engine.a_little_longer(picks, skips, minutes)
     # Picks and "a little longer" options get play links, so only they need Apple's lookup.
     picks = links.add_apple_episode_urls(picks)
@@ -359,9 +370,36 @@ def today_run(user):
             "failed": bl["failed"],
             "backlog_size": len(bl["episodes"]),
             "shows": bl["shows"],
+            "speed": speed,
+            "preferences": prefs,  # kept with the run, for a future picker and evaluation
         },
     )
     return redirect(f"/v2/run/{run_id}")
+
+
+@bp.get("/preferences")
+@login_required
+def preferences_page(user):
+    """"Set my preferences" from Account: the same questions, filled in with the saved
+    answers. Only ever the signed-in user's own row."""
+    prefs = db.get_preferences(user["id"]) or preferences.DEFAULTS
+    return _page("Podsen · preferences", app_views.preferences_form(prefs, _csrf_token(), first_time=False),
+                 logged_in=True)
+
+
+@bp.post("/preferences")
+@login_required
+def preferences_save(user):
+    """Save (or "Skip for now": the defaults) for the signed-in user only. Saving any row
+    means the questions are not asked again; Account has "Set my preferences" to change it.
+    No user id is read from the form."""
+    if request.form.get("action") == "skip":
+        prefs = preferences.clean(None, [], [])  # the defaults, as fresh lists
+    else:
+        prefs = preferences.clean(request.form.get("speed"), request.form.getlist("wants"),
+                                  request.form.getlist("skips"))
+    db.save_preferences(user["id"], prefs)
+    return redirect("/v2/today")
 
 
 def _run_or_404(user, run_id):
