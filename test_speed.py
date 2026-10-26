@@ -230,6 +230,7 @@ def test_the_script_is_present_once_and_under_30_lines():
 def test_today_time_buttons_say_finding_your_picks(client, supa, net):
     login(client)
     add(client, "101", "102", "103")
+    client.post("/v2/preferences", data={"action": "skip"})  # the one-time questions
     html = client.get("/v2/today").get_data(as_text=True)
     form = html.split('action="/v2/today"')[1].split("</form>")[0]
     assert 'data-busy-note="Finding your picks..."' in form
@@ -244,12 +245,15 @@ def test_buttons_have_pressed_hover_and_focus_states():
 
 def _pages(client):
     uid = login(client)
-    add(client, "101", "102")                       # under 3 shows: trending form on Today
-    pages = {"today_trending": client.get("/v2/today").get_data(as_text=True)}
+    pages = {"today_trending": client.get("/v2/today").get_data(as_text=True)}  # no shows: trending
+    add(client, "101", "102")
+    pages["today_prefs"] = client.get("/v2/today").get_data(as_text=True)     # first time: questions
+    client.post("/v2/preferences", data={"action": "skip"})
     add(client, "103")
     _, run_id = run_today(client, 21)
     for name, path in (("today", "/v2/today"), ("shows", "/v2/shows?q=x"), ("run", f"/v2/run/{run_id}"),
-                       ("account", "/v2/account"), ("privacy", "/v2/privacy")):
+                       ("account", "/v2/account"), ("privacy", "/v2/privacy"),
+                       ("preferences", "/v2/preferences")):
         pages[name] = client.get(path).get_data(as_text=True)
     return uid, pages
 
@@ -308,7 +312,7 @@ def test_every_form_still_posts_without_javascript(client, supa, net):
     _, pages = _pages(client)
     ending = ("/v2/logout", "/v2/account/delete")  # these end the session: last, on their own
     posted = []
-    for name in ("run", "today", "today_trending", "shows"):
+    for name in ("run", "today", "today_trending", "today_prefs", "preferences", "shows"):
         posted += _post_forms(client, pages[name], skip=ending)
     posted += _post_forms(client, client.get("/v2/account").get_data(as_text=True),
                           skip=("/v2/account/delete",))          # the account page's Log out
@@ -316,7 +320,7 @@ def test_every_form_still_posts_without_javascript(client, supa, net):
     posted += _post_forms(client, client.get("/v2/account").get_data(as_text=True),
                           skip=("/v2/logout",))                  # then Delete account
     for action in ("/v2/heard", "/v2/feedback", "/v2/today", "/v2/shows/add-many", "/v2/shows/remove",
-                   "/v2/logout", "/v2/account/delete"):
+                   "/v2/preferences", "/v2/logout", "/v2/account/delete"):
         assert action in posted, action
 
 

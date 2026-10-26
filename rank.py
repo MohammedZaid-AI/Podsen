@@ -126,7 +126,8 @@ def fit_to_budget(episodes: list[dict], minutes: int) -> tuple[list[dict], int |
     return [], (min(durations) if durations else None)
 
 
-def build_prompt(episodes: list[dict], minutes: int, max_episodes: int, desc_chars: int):
+def build_prompt(episodes: list[dict], minutes: int, max_episodes: int, desc_chars: int,
+                 listener: str = ""):
     candidates = episodes[:max_episodes]
     # Models copy a short integer far more reliably than a long episode guid.
     listing = [
@@ -140,9 +141,12 @@ def build_prompt(episodes: list[dict], minutes: int, max_episodes: int, desc_cha
         }
         for i, e in enumerate(candidates)
     ]
+    # `listener`: the listener's stated tastes as plain words (v2/preferences.describe),
+    # e.g. "Listener wants: learning. Skips: filler." Never a number: limits live in code.
     user = (
         f"Time available: {minutes} minutes.\n\n"
-        f"Backlog ({len(listing)} unheard episodes):\n"
+        + (f"{listener}\n\n" if listener else "")
+        + f"Backlog ({len(listing)} unheard episodes):\n"
         f"{json.dumps(listing, ensure_ascii=False)}\n\n"
         'Respond with ONLY this JSON, using the "n" numbers from the list:\n'
         '{"picks":[{"n":0,"reason":""}],"skips":[{"n":0,"reason":""}]}\n'
@@ -293,7 +297,7 @@ def parse(text: str, candidates: list[dict]) -> dict:
     return {"picks": picks, "skips": skips}
 
 
-def rank(episodes: list[dict], minutes: int) -> dict:
+def rank(episodes: list[dict], minutes: int, listener: str = "") -> dict:
     backend = _backend_name()
     call = _BACKENDS[backend]
     max_episodes, desc_chars = LIMITS[backend]
@@ -303,7 +307,7 @@ def rank(episodes: list[dict], minutes: int) -> dict:
         # Better to say so than to hand back something twice the length they asked for.
         return {"picks": [], "skips": [], "shortest_unfit": shortest}
 
-    candidates, user = build_prompt(fitting, minutes, max_episodes, desc_chars)
+    candidates, user = build_prompt(fitting, minutes, max_episodes, desc_chars, listener)
 
     def _checked(raw):
         out = parse(raw, candidates)

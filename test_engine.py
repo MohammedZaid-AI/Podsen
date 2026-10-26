@@ -163,3 +163,39 @@ def test_a_little_longer_is_empty_when_nothing_is_close():
 def test_ties_on_extra_time_go_to_the_newest_episode():
     skips = [ep("old", "B", 31, "2026-09-01"), ep("new", "C", 31, "2026-10-15")]
     assert ids(engine.a_little_longer([ep("P", "A", 28, "2026-10-16")], skips, 55)) == ["new", "old"]
+
+
+# --- listening preferences: speed changes the time math, never the picker's logic ---------------
+
+def test_speed_2x_lets_a_60_minute_episode_fit_a_30_minute_budget():
+    from v2 import preferences
+    backlog = [ep("L1", "A", 60, "2026-10-20")]
+    assert engine.pick(backlog, 30)[0] == [], "at 1x a 60 min episode does not fit 30"
+    picks, skips = engine.pick(preferences.at_speed(backlog, 2.0), 30)
+    assert ids(picks) == ["L1"] and skips == []
+    assert picks[0]["duration_min"] == 30 and picks[0]["raw_min"] == 60
+
+
+def test_speed_rounds_listening_time_up_so_the_budget_stays_a_hard_cap():
+    from v2 import preferences
+    assert preferences.listen_minutes(61, 2.0) == 31          # 30.5 -> 31, never 30
+    assert preferences.listen_minutes(45, 1.5) == 30
+    assert preferences.listen_minutes(1, 2.0) == 1             # never 0
+    picks, _ = engine.pick(preferences.at_speed([ep("L1", "A", 61, "2026-10-20")], 2.0), 30)
+    assert picks == [], "61 min at 2x is 31 min: over a 30 min budget"
+
+
+def test_wants_and_skips_go_into_the_llm_prompt_as_plain_words_without_numbers():
+    import rank
+    from v2 import preferences
+    prefs = preferences.clean(2.0, ["news and current events", "learning", "hacking"],
+                              ["promo-heavy shows", "filler"])
+    line = preferences.describe(prefs)
+    assert line == "Listener wants: learning, news and current events. Skips: filler, promo-heavy shows."
+    assert not any(ch.isdigit() for ch in line), "no number in the prompt sentence"
+    eps = preferences.at_speed([ep("L1", "A", 60, "2026-10-20")], prefs["listening_speed"])
+    fitting, _ = rank.fit_to_budget(eps, 30)          # the code-side budget filter, at 2x
+    _, user = rank.build_prompt(fitting, 30, 40, 100, line)
+    assert line in user and "2x" not in user and "speed" not in user.lower()
+    _, plain = rank.build_prompt(fitting, 30, 40, 100)
+    assert "Listener" not in plain, "no preferences: the prompt is unchanged"

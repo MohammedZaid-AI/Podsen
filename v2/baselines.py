@@ -11,6 +11,7 @@ import os
 import random
 
 import rank
+from v2 import preferences as listening
 
 
 def enforce_budget(picks: list[dict], budget_minutes: int) -> tuple[list[dict], list[dict]]:
@@ -76,17 +77,26 @@ def v1_llm_available() -> tuple[bool, str]:
     return True, backend
 
 
-def v1_llm_with_stats(backlog, budget_minutes, intent=""):
+def v1_llm_with_stats(backlog, budget_minutes, intent="", preferences=None):
     """Returns (picks, skips, dropped_over_budget).
 
     V1 tolerates 10% over per episode (BUDGET_TOLERANCE) and never caps the pair's
     total, so its picks are re-checked here against the hard cap. Dropped picks are
     returned so the report can say how often that happened.
+
+    `preferences` (optional, v2/preferences.py): speed turns every length into listening
+    time before rank()'s budget filter and the hard cap below; wants and skips go into
+    the prompt as one plain sentence with no number in it.
     """
     ok, why = v1_llm_available()
     if not ok:
         raise Unavailable(why)
-    out = rank.rank(backlog, budget_minutes)  # `intent` is unused: V1 has no such input
+    if preferences:
+        backlog = listening.at_speed(backlog, preferences["listening_speed"])
+    # `intent` is unused: V1 has no such input.
+    listener = listening.describe(preferences)
+    out = (rank.rank(backlog, budget_minutes, listener=listener) if listener
+           else rank.rank(backlog, budget_minutes))
     by_id = {e["id"]: e for e in backlog}
     # Return the backlog's own episode dicts, not V1's copies with a "reason" attached.
     raw = [by_id[p["id"]] for p in out["picks"] if p["id"] in by_id]
@@ -95,8 +105,8 @@ def v1_llm_with_stats(backlog, budget_minutes, intent=""):
     return picks, skips, dropped
 
 
-def v1_llm(backlog, budget_minutes, intent=""):
-    picks, skips, _ = v1_llm_with_stats(backlog, budget_minutes, intent)
+def v1_llm(backlog, budget_minutes, intent="", preferences=None):
+    picks, skips, _ = v1_llm_with_stats(backlog, budget_minutes, intent, preferences)
     return picks, skips
 
 

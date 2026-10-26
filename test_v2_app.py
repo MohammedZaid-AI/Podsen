@@ -474,6 +474,7 @@ def test_one_show_is_enough_to_get_picks(client):
     same-show fallback fills the time with that show's newest episodes that fit."""
     login(client)
     add(client, "102")  # Second Show: 12, 33 and 61 min, all in the last 30 days
+    client.post("/v2/preferences", data={"action": "skip"})  # the one-time questions
     shows = client.get("/v2/shows").get_data(as_text=True)
     assert 'href="/v2/today">Pick episodes for today' in shows and "Add a show you follow" not in shows
     today = " ".join(client.get("/v2/today").get_data(as_text=True).split())
@@ -531,6 +532,7 @@ def test_suggestions_render_on_today_for_a_new_user(client):
 def test_today_hides_suggestions_once_there_is_a_show(client):
     login(client)
     add(client, "101")
+    client.post("/v2/preferences", data={"action": "skip"})  # the one-time questions
     html = client.get("/v2/today").get_data(as_text=True)
     assert "Trending in" not in html and "How much time do you have" in html
 
@@ -571,7 +573,8 @@ def test_add_selected_adds_several_shows_and_goes_to_today(client):
     assert {s["feed_url"] for s in db.list_shows(uid)} == {
         "https://feeds.example/a", "https://feeds.example/b", "https://feeds.example/d"}
     html = client.get(r.headers["Location"]).get_data(as_text=True)
-    assert "Added 3 shows." in html and "How much time do you have" in html
+    # First time with shows: the confirmation, then the one-time preference questions.
+    assert "Added 3 shows." in html and "Your listening preferences" in html
 
 
 def test_add_selected_with_one_show_added_lands_on_today(client):
@@ -583,7 +586,7 @@ def test_add_selected_with_one_show_added_lands_on_today(client):
     assert [s["itunes_id"] for s in db.list_shows(uid)] == ["101"], "the no-feed show is not added"
     html = client.get(loc).get_data(as_text=True)
     assert "Added 1 show." in html and "1 had no public feed" in html
-    assert "How much time do you have" in html
+    assert "Your listening preferences" in html, "first time with a show: the questions"
 
 
 def test_add_selected_with_nothing_added_stays_and_says_what_happened(client):
@@ -875,6 +878,80 @@ def test_feedback_note_is_stored_read_back_escaped_and_capped(client, monkeypatc
     assert db.all_feedback()[0]["note"] == note[:db.NOTE_MAX]
 
 
+def test_preferences_are_saved_and_read_back(client):
+    uid = login(client)
+    add(client, "101")
+    today = client.get("/v2/today").get_data(as_text=True)
+    assert "Your listening preferences" in today and "Skip for now" in today, "asked before the first triage"
+
+    r = client.post("/v2/preferences", data={"speed": "1.5", "action": "save",
+                                             "wants": ["business", "learning", "not-an-option"],
+                                             "skips": ["filler"]})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/v2/today")
+    assert db.get_preferences(uid) == {"listening_speed": 1.5, "wants": ["learning", "business"],
+                                       "skips": ["filler"]}, "only offered answers, in their order"
+    assert "How much time do you have" in client.get("/v2/today").get_data(as_text=True), "not asked again"
+    account = client.get("/v2/account").get_data(as_text=True)
+    assert "Speed 1.5x. Wants: learning, business. Skips: filler." in account
+    assert 'href="/v2/preferences"' in account and "Set my preferences</a>" in account
+    form = client.get("/v2/preferences").get_data(as_text=True)
+    assert 'name="speed" value="1.5" checked' in form and 'name="wants" value="learning" checked' in form
+    assert 'name="wants" value="stories">' in form and "Skip for now" not in form
+
+    # Changed later from Account: replaced, not added.
+    client.post("/v2/preferences", data={"speed": "2", "action": "save"})
+    assert db.get_preferences(uid) == {"listening_speed": 2.0, "wants": [], "skips": []}
+
+
+def test_a_skipped_question_uses_the_defaults_and_is_not_asked_again(client):
+    uid = login(client)
+    add(client, "102")
+    client.post("/v2/preferences", data={"action": "skip", "speed": "2", "wants": "learning"})
+    assert db.get_preferences(uid) == {"listening_speed": 1.0, "wants": [], "skips": []},         "Skip ignores whatever was ticked"
+    assert "How much time do you have" in client.get("/v2/today").get_data(as_text=True)
+    run, run_id = run_today(client, 30)
+    assert run["payload"]["speed"] == 1.0
+    assert [x["duration_min"] for x in run["payload"]["picks"]] == [12], "1x: real lengths"
+    assert "times at" not in client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+
+
+def test_speed_2x_changes_what_fits_in_a_real_triage(client):
+    login(client)
+    add(client, "102")  # Second Show: 12, 33 and 61 min
+    client.post("/v2/preferences", data={"speed": "2", "action": "save"})
+    run, run_id = run_today(client, 30)
+    picks = run["payload"]["picks"]
+    # At 2x they take 6, 17 and 31 min: the first two fit 30 (23 min), 61 min does not.
+    assert [(x["id"], x["duration_min"], x["raw_min"]) for x in picks] == [("b1", 6, 12), ("b2", 17, 33)]
+    assert sum(x["duration_min"] for x in picks) <= 30
+    assert run["payload"]["speed"] == 2.0 and run["payload"]["preferences"]["listening_speed"] == 2.0
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert "about 23 of 30 min used &middot; times at 2x speed" in html
+
+
+def test_one_user_cannot_read_or_change_another_users_preferences(client):
+    a = login(client, "a@example.com")
+    client.post("/v2/preferences", data={"speed": "2", "wants": "learning", "action": "save"})
+    client.post("/v2/logout")
+
+    b = login(client, "b@example.com")
+    add(client, "101")
+    assert db.get_preferences(b) is None
+    assert "Skip for now" in client.get("/v2/today").get_data(as_text=True), "B is asked, A's answers unused"
+    form = client.get("/v2/preferences").get_data(as_text=True)
+    assert 'name="speed" value="1" checked' in form and 'value="learning" checked' not in form
+    assert "Speed 2x" not in client.get("/v2/account").get_data(as_text=True)
+    # Naming A in the form does nothing: the row is always the signed-in user's.
+    client.post("/v2/preferences", data={"user_id": a, "speed": "1.5", "action": "save"})
+    assert db.get_preferences(a) == {"listening_speed": 2.0, "wants": ["learning"], "skips": []}
+    assert db.get_preferences(b)["listening_speed"] == 1.5
+    # Signed out: no form, no save.
+    client.post("/v2/logout")
+    assert client.get("/v2/preferences").status_code == 302
+    client.post("/v2/preferences", data={"speed": "1.5", "action": "save"})
+    assert db.get_preferences(a)["listening_speed"] == 2.0
+
+
 def test_another_users_run_is_not_found(client):
     login(client)
     add(client, "101", "102", "103")
@@ -1105,13 +1182,15 @@ def test_delete_removes_all_rows_and_the_supabase_auth_user(client, supa):
     run, run_id = run_today(client, 30)
     client.post("/v2/heard", data={"run": run_id, "episode": run["payload"]["picks"][0]["id"]})
     client.post("/v2/feedback", data={"run": run_id, "verdict": "yes"})
+    client.post("/v2/preferences", data={"speed": "1.5", "wants": "learning"})
     assert all(n > 0 for n in db.count_rows(uid).values())
 
     assert "Type DELETE to confirm" in client.get("/v2/account").get_data(as_text=True)
     r = client.post("/v2/account/delete", data={"confirm": " DELETE "})
     assert r.status_code == 200 and "Account deleted" in r.get_data(as_text=True)
 
-    assert db.count_rows(uid) == {"users": 0, "shows": 0, "heard": 0, "runs": 0, "feedback": 0}
+    assert db.count_rows(uid) == {"users": 0, "shows": 0, "heard": 0, "runs": 0, "feedback": 0,
+                                  "preferences": 0}
     (call,) = supa.admin_calls
     assert call["url"] == f"{FAKE_SUPABASE_URL}/auth/v1/admin/users/{uid}"
     assert call["headers"]["apikey"] == FAKE_SERVICE_ROLE_KEY
