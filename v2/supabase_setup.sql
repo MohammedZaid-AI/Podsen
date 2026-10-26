@@ -108,6 +108,18 @@ ALTER TABLE feedback ADD COLUMN IF NOT EXISTS note TEXT;
 
 CREATE INDEX IF NOT EXISTS ix_feedback_run_id ON feedback (run_id);
 
+-- Listening preferences, one row per user (v2/preferences.py). wants and skips are
+-- JSON lists stored as TEXT, e.g. '["learning","business"]'. Added after launch.
+CREATE TABLE IF NOT EXISTS preferences (
+	user_id VARCHAR NOT NULL,
+	listening_speed FLOAT NOT NULL,
+	wants TEXT NOT NULL,
+	skips TEXT NOT NULL,
+	updated_at FLOAT NOT NULL,
+	PRIMARY KEY (user_id),
+	FOREIGN KEY(user_id) REFERENCES users (id)
+);
+
 -- Lock every table to the API: RLS on, no policies.
 
 ALTER TABLE "apple_episodes_cache" ENABLE ROW LEVEL SECURITY;
@@ -127,3 +139,5 @@ ALTER TABLE "runs" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "shows" ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE "feedback" ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE "preferences" ENABLE ROW LEVEL SECURITY;
