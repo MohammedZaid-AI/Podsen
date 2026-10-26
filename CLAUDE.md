@@ -47,6 +47,7 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `v2/trending.py` | trending shows per country (in/us/gb), Apple's chart cached 12 h |
 | `v2/rss.py` | RSS → episodes (stdlib). Durations round UP: the budget is a hard cap |
 | `v2/backlog.py` | a user's backlog: last 30 days of their feeds, minus heard; feed cache |
+| `v2/preferences.py` | listening preferences: allowed answers, speed math (`at_speed`), prompt sentence |
 | `v2/engine.py` | `pick()` — the ONE place the pick method is chosen (now `newest_first_varied`); unused-time reasons, "a little longer" |
 | `v2/links.py` | exact-episode Apple Podcasts links (guid, then exact title) |
 | `v2/refresh.py` | stale-while-revalidate: background cache refreshes, one per key |
@@ -159,6 +160,13 @@ are labelled as searches.
 - **One show is enough** (`app_views.MIN_SHOWS = 1`): zero shows is blocked with "Add a
   show you follow"; with one show the same-show fallback fills the time from it. If every
   show's feed fails, the results page says nothing could be picked (never "inbox zero").
+- **Listening preferences** (`v2/preferences.py`, table `preferences`, one row per user): speed
+  1x/1.5x/2x, wants, skips. Asked once on Today before the first triage (no row = ask); "Skip for
+  now" saves the defaults. Changed from Account -> "Set my preferences" (`/v2/preferences`).
+  Speed only changes the time math: `at_speed()` gives every picker each episode's listening
+  time (minutes / speed, rounded UP) so the budget stays a hard cap; `raw_min` keeps the real
+  length. Wants/skips go only into the LLM prompt (`rank.rank(listener=...)`, no numbers);
+  the live rule picker ignores them. Runs store `speed` and `preferences`.
 - **One add path:** `_add_shows()` in `web.py` (single Add and Add selected) looks up
   every feed URL from Apple; the form's own values are never stored.
 - **Pick rule (`newest_first_varied`):** newest-first fill, at most one episode per

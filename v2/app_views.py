@@ -6,7 +6,7 @@ URLs all come from public feeds or Apple's API and are untrusted.
 
 from urllib.parse import quote, quote_plus, urlparse
 
-from v2 import engine
+from v2 import engine, preferences
 from v2.db import NOTE_MAX
 from views import esc
 from views import page as base_page
@@ -56,6 +56,11 @@ _STYLE = """<style>
   .note-form { margin: 12px 0 0; }
   .note-form textarea { margin-top: 2px; }
   .sent-note { white-space: pre-wrap; margin: 8px 0 0; }
+  .prefs fieldset { border: 0; padding: 0; margin: 0 0 18px; }
+  .prefs legend { font-weight: 600; margin-bottom: 4px; }
+  .prefs label.choice { display: flex; align-items: center; gap: 10px; min-height: 44px; margin: 0; }
+  .prefs input[type=radio], .prefs input[type=checkbox] { width: 22px; height: 22px; flex: none;
+    margin: 0; accent-color: #1db954; }
   .links a { transition: filter .12s, transform .06s; }
   .links a:hover { filter: brightness(1.25); border-color: #3a3d44; }
   .links a:active { filter: brightness(.85); transform: translateY(1px) scale(.98); }
@@ -169,6 +174,9 @@ def _note(msg):
     return f'<p class="note">{esc(msg)}</p>' if msg else ""
 
 
+added_line = _note  # the same line, used by web.py above the preference questions
+
+
 def added_note(added: int, skipped: int = 0) -> str | None:
     parts = []
     if added:
@@ -257,6 +265,54 @@ def shows_page(my_shows: list[dict], query: str = "", results=None, error: str |
 {_error(error)}
 {found}
 {trend}"""
+
+
+# --- listening preferences -----------------------------------------------------------------
+
+def _choices(kind: str, name: str, options, chosen) -> str:
+    return "".join(
+        f'<label class="choice"><input type="{kind}" name="{name}" value="{esc(o)}"'
+        f'{" checked" if o in chosen else ""}>{esc(label)}</label>'
+        for o, label in options
+    )
+
+
+def preferences_form(prefs: dict, csrf: str, first_time: bool) -> str:
+    """The three optional questions. first_time: before the first triage, with
+    "Skip for now" (saves the defaults so it is not asked again). Otherwise reached from
+    Account's "Set my preferences", filled in with the saved answers."""
+    speeds = [(f"{v:g}", preferences.speed_label(v)) for v in preferences.SPEEDS]
+    chosen_speed = {f"{prefs['listening_speed']:g}"}
+    intro = ("<p>Three quick questions so picks fit how you listen. All optional; you can "
+             "change them any time from Account.</p>" if first_time else "")
+    later = ('<button class="secondary" name="action" value="skip">Skip for now</button>' if first_time
+             else '<a class="btn secondary" href="/v2/account" style="background:#2a2c31;color:#e9e9ec">Cancel</a>')
+    return f"""<h2>Your listening preferences</h2>
+{intro}
+<form method="post" action="/v2/preferences" class="prefs">{_csrf(csrf)}
+  <fieldset><legend>Listening speed</legend>
+    {_choices("radio", "speed", speeds, chosen_speed)}
+  </fieldset>
+  <fieldset><legend>What you want from podcasts <span class="meta">(pick any)</span></legend>
+    {_choices("checkbox", "wants", [(w, w.capitalize()) for w in preferences.WANTS], prefs["wants"])}
+  </fieldset>
+  <fieldset><legend>What you usually skip <span class="meta">(pick any)</span></legend>
+    {_choices("checkbox", "skips", [(k, k.capitalize()) for k in preferences.SKIPS], prefs["skips"])}
+  </fieldset>
+  <div class="row">
+    <button name="action" value="save">Save</button>
+    {later}
+  </div>
+</form>"""
+
+
+def _prefs_summary(prefs: dict | None) -> str:
+    if prefs is None:
+        return "Not set yet: Podsen uses 1x speed and no topic preferences."
+    wants = ", ".join(prefs["wants"]) or "nothing chosen"
+    skips = ", ".join(prefs["skips"]) or "nothing chosen"
+    return (f"Speed {esc(preferences.speed_label(prefs['listening_speed']))}. "
+            f"Wants: {esc(wants)}. Skips: {esc(skips)}.")
 
 
 # --- today -------------------------------------------------------------------------------
@@ -406,6 +462,12 @@ def _note_box(run_id: str, note: str | None, csrf: str) -> str:
 </form>"""
 
 
+def _at_speed(payload: dict) -> str:
+    """Times on a run made at a faster speed are listening times: say so once."""
+    speed = payload.get("speed") or 1.0
+    return "" if speed == 1.0 else f" &middot; times at {esc(preferences.speed_label(speed))} speed"
+
+
 def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: str | None = None) -> str:
     p = run["payload"]
     picks, skips, budget = p["picks"], p["skips"], run["budget"]
@@ -455,7 +517,7 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
                        + "".join(_pick(run["id"], x, x["id"] in heard, csrf, longer=True) for x in longer))
 
     return f"""<p class="meta">{_count(p['backlog_size'], "recent unheard episode")} across
-{_count(p['shows'], "show")} &middot; about {esc(used)} of {esc(budget)} min used</p>
+{_count(p['shows'], "show")} &middot; about {esc(used)} of {esc(budget)} min used{_at_speed(p)}</p>
 {failed_note(p.get('failed'), p['shows'])}
 <h2>Worth it now</h2>
 {picks_html}
@@ -478,6 +540,8 @@ def privacy() -> str:
       receive your email and an account id, never your Google password.</li>
   <li><strong>The shows you chose</strong> (name and public feed address).</li>
   <li><strong>Episodes you marked as heard</strong>, so they stop being suggested.</li>
+  <li><strong>Your listening preferences</strong>, if you set them: listening speed, what
+      you want from podcasts and what you usually skip.</li>
   <li><strong>Each set of picks we showed you and your feedback on it</strong>
       (yes / somewhat / no, any note you choose to add, the time you had, and which
       episodes were picked),
@@ -499,14 +563,17 @@ anyone else.</p>
 
 # --- account -----------------------------------------------------------------------------
 
-def account_page(email: str, error: str | None = None, csrf: str = "") -> str:
+def account_page(email: str, error: str | None = None, csrf: str = "", prefs: dict | None = None) -> str:
     return f"""<h2>Account</h2>
 <p>Signed in with Google as <strong>{esc(email)}</strong>. You stay signed in on this
 browser for 30 days unless you log out.</p>
 <form method="post" action="/v2/logout">{_csrf(csrf)}<button class="secondary">Log out</button></form>
+<h2>Listening preferences</h2>
+<p class="meta">{_prefs_summary(prefs)}</p>
+<p><a class="btn secondary" href="/v2/preferences" style="background:#2a2c31;color:#e9e9ec">Set my preferences</a></p>
 <h2>Delete my account</h2>
 <p>This permanently deletes your account and all its data: your shows, heard episodes,
-picks, feedback and your sign-in record. It cannot be undone.</p>
+preferences, picks, feedback and your sign-in record. It cannot be undone.</p>
 {_error(error)}
 <form method="post" action="/v2/account/delete">{_csrf(csrf)}
   <label class="field"><span>Type DELETE to confirm</span>
