@@ -102,7 +102,18 @@ feedback = Table(
     Column("note", Text, nullable=True),
 )
 NOTE_MAX = 500  # characters; longer notes are cut, never rejected
-USER_TABLES = (feedback, runs, heard, shows)  # deletion order: children first
+# Listening preferences (v2/preferences.py), one row per user. wants and skips are JSON
+# lists in TEXT: one code path for Postgres and SQLite. A row means the questions were
+# answered or skipped; no row means "ask before the first triage".
+preferences = Table(
+    "preferences", metadata,
+    Column("user_id", String, ForeignKey("users.id"), primary_key=True),
+    Column("listening_speed", Float, nullable=False),
+    Column("wants", Text, nullable=False),
+    Column("skips", Text, nullable=False),
+    Column("updated_at", Float, nullable=False),
+)
+USER_TABLES = (preferences, feedback, runs, heard, shows)  # deletion order: children first
 
 
 # --- engine ------------------------------------------------------------------------------
@@ -318,7 +329,8 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
         for col in ("fetched", "payload"):
             extra.append(select(trending_cache.c[col]).where(trending_cache.c.country == trending_country)
                          .scalar_subquery().label(f"t_{col}"))
-    joined = users.outerjoin(shows, shows.c.user_id == users.c.id)
+    joined = (users.outerjoin(preferences, preferences.c.user_id == users.c.id)
+             .outerjoin(shows, shows.c.user_id == users.c.id))
     if with_caches:
         joined = (joined.outerjoin(feed_cache, feed_cache.c.feed_url == shows.c.feed_url)
                   .outerjoin(apple_episodes_cache, apple_episodes_cache.c.itunes_id == shows.c.itunes_id))
@@ -326,7 +338,9 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
                   apple_episodes_cache.c.fetched.label("a_fetched"),
                   apple_episodes_cache.c.payload.label("a_payload")]
     stmt = (select(users.c.id.label("u_id"), users.c.email.label("u_email"),
-                   users.c.created.label("u_created"), heard_agg.label("u_heard"), *extra, *shows.c)
+                   users.c.created.label("u_created"), heard_agg.label("u_heard"),
+                   preferences.c.listening_speed.label("p_speed"), preferences.c.wants.label("p_wants"),
+                   preferences.c.skips.label("p_skips"), *extra, *shows.c)
             .select_from(joined).where(users.c.id == user_id).order_by(shows.c.added))
     with _tx() as c:
         rows = list(c.execute(stmt))
@@ -339,6 +353,8 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
                      if r._mapping["itunes_id"] is not None]
         heard_set = set(filter(None, (first["u_heard"] or "").split(HEARD_SEP)))
         result = (user, show_list, heard_set)
+        memo[("prefs", user_id)] = (None if first["p_speed"] is None else
+                                    _prefs_row(first["p_speed"], first["p_wants"], first["p_skips"]))
         if run_id:
             memo[("run", run_id)] = (None if first["r_payload"] is None else
                                      {"id": run_id, "user_id": user_id,
@@ -387,9 +403,41 @@ def delete_user(user_id: str) -> None:
 def count_rows(user_id: str) -> dict:
     with _tx() as c:
         out = {"users": c.execute(select(func.count()).select_from(users).where(users.c.id == user_id)).scalar()}
-        for t in (shows, heard, runs, feedback):
+        for t in (shows, heard, runs, feedback, preferences):
             out[t.name] = c.execute(select(func.count()).select_from(t).where(t.c.user_id == user_id)).scalar()
     return out
+
+
+# --- listening preferences -----------------------------------------------------------------
+
+def _prefs_row(speed, wants, skips) -> dict:
+    return {"listening_speed": speed, "wants": json.loads(wants), "skips": json.loads(skips)}
+
+
+def get_preferences(user_id: str) -> dict | None:
+    """This user's preferences, or None if they were never asked. Keyed by the signed-in
+    user's id only: there is no way to name another user's row."""
+    memo = _memo()
+    if ("prefs", user_id) in memo:  # brought along by the request's first query
+        return memo[("prefs", user_id)]
+    with _tx() as c:
+        row = c.execute(select(preferences).where(preferences.c.user_id == user_id)).first()
+    out = None if row is None else _prefs_row(row.listening_speed, row.wants, row.skips)
+    memo[("prefs", user_id)] = out
+    return out
+
+
+def save_preferences(user_id: str, prefs: dict) -> None:
+    """Insert or replace this user's row. prefs must already be cleaned
+    (preferences.clean): only offered answers."""
+    with _tx() as c:
+        _upsert(c, preferences, {
+            "user_id": user_id, "listening_speed": prefs["listening_speed"],
+            "wants": json.dumps(prefs["wants"]), "skips": json.dumps(prefs["skips"]),
+            "updated_at": time.time(),
+        }, ["user_id"])
+    _forget(user_id)
+    _memo().pop(("prefs", user_id), None)
 
 
 # --- shows -------------------------------------------------------------------------------
