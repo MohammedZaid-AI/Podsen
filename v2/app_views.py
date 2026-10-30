@@ -79,6 +79,20 @@ _STYLE = """<style>
   .unused { color: #c4c7cc; margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid #2a2c31; }
   .needs { color: #e8d9a8; font-size: 14px; }
   .landing-cta { margin: 26px 0 14px; }  .landing-cta .btn { padding: 12px 26px; font-size: 17px; }
+  /* First-run guide: three numbered steps, the current one lit. */
+  .steps { display: flex; gap: 8px; margin: 0 0 20px; padding: 0; list-style: none; font-size: 14px; }
+  .steps li { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 10px 6px; text-align: center;
+    border: 1px solid #23252a; border-radius: 10px; color: #9aa0a6; line-height: 1.25; }
+  .steps .n { display: inline-flex; align-items: center; justify-content: center; flex: none;
+    width: 24px; height: 24px; border-radius: 50%; background: #23252a; font-weight: 600; }
+  .steps .now { border-color: #1db954; color: #e9e9ec; }
+  .steps .now .n { background: #1db954; color: #101114; }
+  .steps .done .n { background: #1f3b2a; color: #6fd08c; }
+  .welcome h2 { margin-top: 0; }
+  .welcome p { margin: 6px 0; }
+  .lead { color: #c4c7cc; margin: -4px 0 12px; }
+  details.more { margin-top: 4px; }  details.more .links { margin-top: 0; }
   @media (max-width: 480px) {
     .show img { width: 48px; height: 48px; }
     .standfirst { font-size: 19px; }
@@ -116,6 +130,21 @@ def page(title: str, body: str, logged_in: bool = False, hero: bool = False, csr
 
 def _error(msg):
     return f'<p class="err">{esc(msg)}</p>' if msg else ""
+
+
+STEPS = ("Add shows", "Pick time", "Get picks")
+
+
+def steps(current: int) -> str:
+    """The three-step guide, so a new user always knows where they are and what's next.
+    `current` is 1, 2 or 3."""
+    items = []
+    for i, label in enumerate(STEPS, 1):
+        cls = "now" if i == current else ("done" if i < current else "")
+        mark = "&#10003;" if i < current else str(i)
+        here = ' aria-current="step"' if i == current else ""
+        items.append(f'<li class="{cls}"{here}><span class="n">{mark}</span>{esc(label)}</li>')
+    return f'<ol class="steps" aria-label="How Podsen works">{"".join(items)}</ol>'
 
 
 # --- landing + auth --------------------------------------------------------------------
@@ -252,11 +281,24 @@ def shows_page(my_shows: list[dict], query: str = "", results=None, error: str |
     ) or '<p class="meta">No shows yet. Search below to add some.</p>'
 
     trend = trending_section(trending, have, csrf, "shows", "Trending") if trending else ""
-    # The shows you chose come first; finding more comes after.
-    return f"""{_note(note)}
+    if n == 0:
+        # The first screen after sign-in: say what Podsen is and the one thing to do now,
+        # instead of an empty list and a warning.
+        top = f"""{steps(1)}{_note(note)}
+<div class="welcome">
+<h2>Welcome to Podsen</h2>
+<p>Too many episodes, not enough time? Podsen picks the ones worth playing right now,
+and tells you what's safe to skip.</p>
+<p><strong>Add a show you follow to get picks.</strong> Search for it below, or tick
+some from the trending list.</p>
+</div>"""
+    else:
+        # The shows you chose come first; finding more comes after.
+        top = f"""{_note(note)}
 <h2>My shows ({n})</h2>
 {need}
-{mine}
+{mine}"""
+    return f"""{top}
 <h2>Find your shows</h2>
 <form method="get" action="/v2/shows" class="row" style="flex-wrap:nowrap">
   <input type="search" name="q" value="{esc(query)}" placeholder="Search podcasts" required maxlength="100">
@@ -287,7 +329,7 @@ def preferences_form(prefs: dict, csrf: str, first_time: bool) -> str:
              "change them any time from Account.</p>" if first_time else "")
     later = ('<button class="secondary" name="action" value="skip">Skip for now</button>' if first_time
              else '<a class="btn secondary" href="/v2/account" style="background:#2a2c31;color:#e9e9ec">Cancel</a>')
-    return f"""<h2>Your listening preferences</h2>
+    return f"""{steps(2) if first_time else ""}<h2>Your listening preferences</h2>
 {intro}
 <form method="post" action="/v2/preferences" class="prefs">{_csrf(csrf)}
   <fieldset><legend>Listening speed</legend>
@@ -322,14 +364,15 @@ def today_form(n_shows: int, error: str | None = None, csrf: str = "",
     if n_shows < MIN_SHOWS:
         trend = (trending_section(trending, have or set(), csrf, "today",
                                   f"Trending in {trending['label']}") if trending else "")
-        return f"""{_note(note)}{_error(error)}
-<p class="meta">Add a show you follow to get started. Tick one below, or search for yours.</p>
+        return f"""{steps(1)}{_note(note)}{_error(error)}
+<p>Add a show you follow to get started. Tick one below, or search for yours.</p>
 {trend}
 <p style="margin-top:20px"><a class="btn secondary" href="/v2/shows"
   style="background:#2a2c31;color:#e9e9ec">Add shows</a></p>"""
-    return f"""{_note(note)}{_error(error)}
+    return f"""{steps(2)}{_note(note)}{_error(error)}
 <form method="post" action="/v2/today" data-busy-note="Finding your picks...">{_csrf(csrf)}
   <h2>How much time do you have right now?</h2>
+  <p class="lead">Tap one. Podsen will pick what to play in that time.</p>
   <div class="row">
     <button name="minutes" value="15">15 min</button>
     <button name="minutes" value="30">30 min</button>
@@ -342,9 +385,8 @@ def today_form(n_shows: int, error: str | None = None, csrf: str = "",
   </div>
   <p class="busy-note" hidden aria-live="polite"></p>
 </form>
-<p class="meta" style="margin-top:20px">Tap a time. Podsen picks the newest episodes from your
-{_count(n_shows, "show")} (last 30 days) that fit it, and lists the rest as safe to skip.
-First run can take a few seconds while feeds load.</p>"""
+<p class="meta" style="margin-top:20px">Picks come from the newest episodes from your
+{_count(n_shows, "show")} (last 30 days). The first time can take a few seconds.</p>"""
 
 
 # --- results -----------------------------------------------------------------------------
@@ -434,11 +476,13 @@ def _pick(run_id: str, ep: dict, heard: bool, csrf: str, longer: bool = False) -
   <details><summary class="meta">Play here</summary>{player}</details>
   <div class="links">
     <a href="{esc(spotify_link(ep))}" target="_blank" rel="noopener">{_icon("spotify")}Open in Spotify</a>
+    {heard_ctl}
+  </div>
+  <details class="more"><summary class="meta">Other apps</summary><div class="links">
     {_apple_link(ep)}
     <a href="{esc(youtube_link(ep))}" target="_blank" rel="noopener">{_icon("youtube")}Search on YouTube</a>
     <a href="{esc(amazon_music_link(ep))}" target="_blank" rel="noopener">{_icon("amazonmusic")}Search on Amazon Music</a>
-    {heard_ctl}
-  </div>
+  </div></details>
 </div>"""
 
 
@@ -520,12 +564,15 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
 {_count(p['shows'], "show")} &middot; about {esc(used)} of {esc(budget)} min used{_at_speed(p)}</p>
 {failed_note(p.get('failed'), p['shows'])}
 <h2>Worth it now</h2>
+{'<p class="lead">Play these. Together they fit your time.</p>' if picks else ""}
 {picks_html}
 {unused}
 <h2 id="feedback">Was this worth your time?</h2>
+{"" if verdict else '<p class="lead">Would you actually play these? Your answer helps make the picks better.</p>'}
 {ask}
 {longer_html}
 <h2>Safe to skip</h2>
+{'<p class="lead">You can leave these for another day. Nothing is deleted.</p>' if skips else ""}
 {skips_html or '<p class="meta">Nothing else in your recent backlog.</p>'}
 <p style="margin-top:24px"><a class="btn" href="/v2/today">Pick again</a></p>"""
 

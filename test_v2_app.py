@@ -440,7 +440,7 @@ def test_search_add_and_remove_a_show(client):
     assert [s["feed_url"] for s in db.list_shows(uid)] == ["https://feeds.example/b"]
 
     client.post("/v2/shows/remove", data={"itunes_id": "102"})
-    assert "My shows (0)" in client.get("/v2/shows").get_data(as_text=True)
+    assert "Welcome to Podsen" in client.get("/v2/shows").get_data(as_text=True)
 
 
 def test_show_without_a_public_feed_cannot_be_added(client):
@@ -540,8 +540,8 @@ def test_today_hides_suggestions_once_there_is_a_show(client):
 def test_my_shows_has_a_trending_section_under_the_search_box(client):
     login(client)
     html = client.get("/v2/shows").get_data(as_text=True)
-    # The shows you chose come first, then search, then trending.
-    assert html.index("My shows (") < html.index('action="/v2/shows"') < html.index("<h2>Trending</h2>")
+    # With no shows yet: the welcome first, then search, then trending.
+    assert html.index("Welcome to Podsen") < html.index('action="/v2/shows"') < html.index("<h2>Trending</h2>")
     assert 'href="/v2/shows?country=us"' in html
     assert 'value="101"' in _trending_form(html)
 
@@ -1520,3 +1520,21 @@ def test_my_shows_lists_the_newest_added_first(client):
     html = client.get("/v2/shows").get_data(as_text=True)
     mine = html.split("My shows (2)")[1].split("Find your shows")[0]
     assert mine.index('value="102"') < mine.index('value="101"')
+
+
+def test_new_user_sees_the_three_steps_and_where_they_are(client):
+    """Testers opened the app and could not tell what to do. The first screens show the
+    three steps with the current one marked."""
+    login(client)
+    shows = client.get("/v2/shows").get_data(as_text=True)
+    assert "Welcome to Podsen" in shows and "My shows (0)" not in shows
+    assert 'aria-current="step"><span class="n">1</span>Add shows' in shows
+    add(client, "102")
+    prefs = client.get("/v2/today").get_data(as_text=True)
+    assert 'aria-current="step"><span class="n">2</span>Pick time' in prefs
+    client.post("/v2/preferences", data={"action": "skip"})
+    today = client.get("/v2/today").get_data(as_text=True)
+    assert 'aria-current="step"><span class="n">2</span>Pick time' in today
+    assert "Tap one. Podsen will pick what to play in that time." in today
+    # Once you have shows, My shows is your list again, not the welcome.
+    assert "Welcome to Podsen" not in client.get("/v2/shows").get_data(as_text=True)
