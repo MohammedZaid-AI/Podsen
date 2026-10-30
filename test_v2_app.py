@@ -1570,4 +1570,4 @@ def test_account_button_ignores_a_picture_not_from_google(client, supa):
         _login_with(client, supa, {"avatar_url": bad})
         html = client.get("/v2/today").get_data(as_text=True)
         assert bad not in html, bad
-        assert '<span class="initial">M</span>' in html, bad  # the email's initial instead
+        assert '<span class="initial"><img class="mark" src="/static/podsen-logo.png"' in html, bad

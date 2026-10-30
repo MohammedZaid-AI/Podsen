@@ -102,6 +102,9 @@ _STYLE = """<style>
     font-weight: 600; color: #e9e9ec; }
   .me:hover img, .me:hover .initial, .me[aria-current=page] img,
   .me[aria-current=page] .initial { box-shadow: 0 0 0 2px #1db954; }
+  /* A play triangle looks off-center when its box is centered: nudge it right a touch. */
+  .me .initial img.mark { width: 26px; height: 26px; border-radius: 0; box-shadow: none;
+    background: none; object-fit: contain; transform: translateX(1px); }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   details.more { margin-top: 4px; }  details.more .links { margin-top: 0; }
   @media (max-width: 480px) {
@@ -125,7 +128,7 @@ NAV = (("/v2/today", "Today"), ("/v2/shows", "My shows"))
 
 
 def account_button(me: dict | None, active: str = "") -> str:
-    """Top right on every signed-in page: your Google picture (or your initial), linking to
+    """Top right on every signed-in page: your Google picture (or the Podsen mark), linking to
     Account, where Log out and settings live. The picture comes only from Google's image
     host (auth.avatar_url checks it) and is loaded with no referrer."""
     me = me or {}
@@ -134,7 +137,9 @@ def account_button(me: dict | None, active: str = "") -> str:
     if url and urlparse(url).scheme == "https":
         face = (f'<img src="{esc(url)}" alt="" width="40" height="40" referrerpolicy="no-referrer">')
     else:
-        face = f'<span class="initial">{esc((email[:1] or "?").upper())}</span>'
+        # No Google picture: the Podsen mark, centered in the circle.
+        face = ('<span class="initial"><img class="mark" src="/static/podsen-logo.png" alt="" '
+                'width="26" height="26"></span>')
     current = ' aria-current="page"' if active == "/v2/account" else ""
     return (f'<a class="me" href="/v2/account"{current} title="Account ({esc(email)})">'
             f'{face}<span class="sr">Account</span></a>')
