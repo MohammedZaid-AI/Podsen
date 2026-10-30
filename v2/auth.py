@@ -67,7 +67,8 @@ def authorize_url(redirect_to: str, verifier: str) -> str:
 # --- Supabase calls ----------------------------------------------------------------------
 
 def exchange_code(code: str, verifier: str) -> dict:
-    """Return {"id", "email"} for the signed-in user, or raise AuthError."""
+    """Return {"id", "email", "avatar_url"} for the signed-in user, or raise AuthError.
+    avatar_url is None when Google sent no usable picture."""
     anon = _key("SUPABASE_ANON_KEY")
     try:
         r = requests.post(
@@ -96,7 +97,28 @@ def exchange_code(code: str, verifier: str) -> dict:
     uid, email = str(user.get("id") or ""), str(user.get("email") or "").strip().lower()
     if not uid or not email:
         raise AuthError("no_email", "Google didn't share an email address, so we can't sign you in.")
-    return {"id": uid, "email": email}
+    return {"id": uid, "email": email, "avatar_url": avatar_url(user.get("user_metadata"))}
+
+
+AVATAR_HOST = ".googleusercontent.com"
+
+
+def avatar_url(meta) -> str | None:
+    """Google's profile picture URL from Supabase's user_metadata, or None.
+
+    Only an https URL on Google's own image host is kept: it is rendered as an <img>,
+    so it must never point anywhere a signed-in page could leak to."""
+    if not isinstance(meta, dict):
+        return None
+    url = meta.get("avatar_url") or meta.get("picture")
+    if not isinstance(url, str) or len(url) > 1000:
+        return None
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    host = (u.hostname or "").lower()
+    if u.scheme != "https" or not host.endswith(AVATAR_HOST):
+        return None
+    return url
 
 
 def delete_auth_user(user_id: str) -> None:

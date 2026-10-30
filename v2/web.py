@@ -90,8 +90,10 @@ def login_required(view):
 
 
 def _page(title, body, status=200, logged_in=False):
+    # Memoised per request: the user came with the page's one query, so this is free.
+    me = _current_user() if logged_in else None
     return app_views.page(title, body, logged_in=logged_in, csrf=_csrf_token(),
-                          active=request.path), status
+                          active=request.path, me=me), status
 
 
 def _callback_url() -> str:
@@ -153,7 +155,7 @@ def auth_callback():
         current_app.logger.warning("sign-in failed: %s", e.kind)  # the kind only, never a key
         return _page("Podsen · sign in", app_views.login_error(str(e)), status)
 
-    db.upsert_user(user["id"], user["email"])
+    db.upsert_user(user["id"], user["email"], user.get("avatar_url"))
     _log_in(user["id"])
     # Land on My shows: the shows you chose are listed first, then finding more.
     return redirect("/v2/shows")

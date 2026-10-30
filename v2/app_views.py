@@ -92,6 +92,17 @@ _STYLE = """<style>
   .welcome h2 { margin-top: 0; }
   .welcome p { margin: 6px 0; }
   .lead { color: #c4c7cc; margin: -4px 0 12px; }
+  /* Account button, top right, beside the logo. */
+  main { position: relative; }
+  .me { position: absolute; top: 28px; right: 16px; display: flex; align-items: center; text-decoration: none;
+    justify-content: center; width: 48px; height: 48px; border-radius: 50%; }
+  .me img, .me .initial { width: 40px; height: 40px; border-radius: 50%; object-fit: cover;
+    box-shadow: 0 0 0 2px #2a2c31; background: #23252a; }
+  .me .initial { display: flex; align-items: center; justify-content: center;
+    font-weight: 600; color: #e9e9ec; }
+  .me:hover img, .me:hover .initial, .me[aria-current=page] img,
+  .me[aria-current=page] .initial { box-shadow: 0 0 0 2px #1db954; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   details.more { margin-top: 4px; }  details.more .links { margin-top: 0; }
   @media (max-width: 480px) {
     .show img { width: 48px; height: 48px; }
@@ -110,18 +121,34 @@ def _csrf(token: str) -> str:
     return f'<input type="hidden" name="csrf_token" value="{esc(token)}">'
 
 
-NAV = (("/v2/today", "Today"), ("/v2/shows", "My shows"), ("/v2/account", "Account"))
+NAV = (("/v2/today", "Today"), ("/v2/shows", "My shows"))
+
+
+def account_button(me: dict | None, active: str = "") -> str:
+    """Top right on every signed-in page: your Google picture (or your initial), linking to
+    Account, where Log out and settings live. The picture comes only from Google's image
+    host (auth.avatar_url checks it) and is loaded with no referrer."""
+    me = me or {}
+    email = me.get("email") or ""
+    url = me.get("avatar_url")
+    if url and urlparse(url).scheme == "https":
+        face = (f'<img src="{esc(url)}" alt="" width="40" height="40" referrerpolicy="no-referrer">')
+    else:
+        face = f'<span class="initial">{esc((email[:1] or "?").upper())}</span>'
+    current = ' aria-current="page"' if active == "/v2/account" else ""
+    return (f'<a class="me" href="/v2/account"{current} title="Account ({esc(email)})">'
+            f'{face}<span class="sr">Account</span></a>')
 
 
 def page(title: str, body: str, logged_in: bool = False, hero: bool = False, csrf: str = "",
-         active: str = "") -> str:
-    """`active`: the current path, so the nav shows where you are."""
+         active: str = "", me: dict | None = None) -> str:
+    """`active`: the current path, so the nav shows where you are. `me`: the signed-in
+    user, for the account button."""
     if logged_in:
         current = ' aria-current="page"'
         items = "".join(f'<a href="{href}"{current if active == href else ""}>{label}</a>'
                         for href, label in NAV)
-        nav = f"""<nav class="nav">{items}
-  <form method="post" action="/v2/logout">{_csrf(csrf)}<button class="linkbtn">Log out</button></form></nav>"""
+        nav = f'{account_button(me, active)}<nav class="nav">{items}</nav>'
     else:
         nav = ""
     foot = '<footer class="foot"><a href="/v2/privacy">Privacy</a> &middot; Podsen</footer>'
@@ -583,8 +610,10 @@ def privacy() -> str:
     return """<h2>Privacy</h2>
 <p>What Podsen stores about you, and nothing else:</p>
 <ul>
-  <li><strong>Your email address, from Google.</strong> You sign in with Google; we
-      receive your email and an account id, never your Google password.</li>
+  <li><strong>Your email address and profile picture link, from Google.</strong> You sign
+      in with Google; we receive your email, an account id and the link to your Google
+      profile picture (shown top right), never your Google password. The picture itself
+      stays on Google and is loaded from there.</li>
   <li><strong>The shows you chose</strong> (name and public feed address).</li>
   <li><strong>Episodes you marked as heard</strong>, so they stop being suggested.</li>
   <li><strong>Your listening preferences</strong>, if you set them: listening speed, what

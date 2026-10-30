@@ -29,6 +29,7 @@ users = Table(
     Column("id", String, primary_key=True),  # Supabase auth user id (uuid)
     Column("email", String, nullable=False, index=True),
     Column("created", Float, nullable=False),
+    Column("avatar_url", String, nullable=True),  # Google profile picture, refreshed each sign-in
 )
 shows = Table(
     "shows", metadata,
@@ -219,6 +220,12 @@ def ensure_schema(eng) -> None:
                 "to podsen_v2.old.db) so the app can start a fresh local database."
             )
     metadata.create_all(eng)
+    # Columns added after a table first existed: create_all never alters a table.
+    with eng.begin() as c:
+        if eng.dialect.name == "postgresql":
+            c.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT"))
+        elif "avatar_url" not in {r[1] for r in c.execute(text("PRAGMA table_info(users)"))}:
+            c.execute(text("ALTER TABLE users ADD COLUMN avatar_url TEXT"))
     if eng.dialect.name == "postgresql":
         with eng.begin() as c:
             for t in metadata.sorted_tables:
@@ -289,13 +296,16 @@ HEARD_SEP = "\x1f"  # unit separator: never part of an RSS guid in practice
 
 # --- users -------------------------------------------------------------------------------
 
-def upsert_user(user_id: str, email: str) -> None:
+def upsert_user(user_id: str, email: str, avatar_url: str | None = None) -> None:
+    """The picture is replaced on every sign-in, so a changed or removed one follows."""
     with _tx() as c:
         existing = c.execute(select(users.c.id).where(users.c.id == user_id)).first()
         if existing:
-            c.execute(users.update().where(users.c.id == user_id).values(email=email))
+            c.execute(users.update().where(users.c.id == user_id)
+                      .values(email=email, avatar_url=avatar_url))
         else:
-            c.execute(users.insert().values(id=user_id, email=email, created=time.time()))
+            c.execute(users.insert().values(id=user_id, email=email, created=time.time(),
+                                            avatar_url=avatar_url))
     _forget(user_id)
 
 
@@ -338,7 +348,7 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
                   apple_episodes_cache.c.fetched.label("a_fetched"),
                   apple_episodes_cache.c.payload.label("a_payload")]
     stmt = (select(users.c.id.label("u_id"), users.c.email.label("u_email"),
-                   users.c.created.label("u_created"), heard_agg.label("u_heard"),
+                   users.c.created.label("u_created"), users.c.avatar_url.label("u_avatar"), heard_agg.label("u_heard"),
                    preferences.c.listening_speed.label("p_speed"), preferences.c.wants.label("p_wants"),
                    preferences.c.skips.label("p_skips"), *extra, *shows.c)
             .select_from(joined).where(users.c.id == user_id).order_by(shows.c.added))
@@ -348,7 +358,8 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
         result = None
     else:
         first = rows[0]._mapping
-        user = {"id": first["u_id"], "email": first["u_email"], "created": first["u_created"]}
+        user = {"id": first["u_id"], "email": first["u_email"], "created": first["u_created"],
+                "avatar_url": first["u_avatar"]}
         show_list = [{k: r._mapping[k] for k in shows.c.keys()} for r in rows
                      if r._mapping["itunes_id"] is not None]
         heard_set = set(filter(None, (first["u_heard"] or "").split(HEARD_SEP)))

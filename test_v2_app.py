@@ -972,7 +972,7 @@ def test_pages_need_a_login(client):
 def test_privacy_page_says_google_and_supabase(client):
     assert 'href="/v2/privacy"' in client.get("/v2/").get_data(as_text=True)
     html = client.get("/v2/privacy").get_data(as_text=True).lower()
-    for item in ("email address, from google", "supabase", "shows", "heard", "feedback",
+    for item in ("email address and profile picture link, from google", "supabase", "shows", "heard", "feedback",
                  "never sell", "type delete"):
         assert item in html, item
     assert "password, hashed" not in html and "failed log-in" not in html
@@ -1149,8 +1149,11 @@ def test_login_lasts_30_days_and_log_out_ends_it(client, supa):
     days = (expires - datetime.now(timezone.utc)).total_seconds() / 86400
     assert 29.9 < days <= 30.01
 
-    nav = client.get("/v2/today").get_data(as_text=True)
-    assert 'action="/v2/logout"' in nav and "Log out" in nav
+    # Log out lives on Account, reached from the account button top right on every page.
+    today = client.get("/v2/today").get_data(as_text=True)
+    assert '<a class="me" href="/v2/account"' in today
+    account = client.get("/v2/account").get_data(as_text=True)
+    assert 'action="/v2/logout"' in account and "Log out" in account
 
     r = client.post("/v2/logout")
     cookie = _session_cookie(r)
@@ -1538,3 +1541,33 @@ def test_new_user_sees_the_three_steps_and_where_they_are(client):
     assert "Tap one. Podsen will pick what to play in that time." in today
     # Once you have shows, My shows is your list again, not the welcome.
     assert "Welcome to Podsen" not in client.get("/v2/shows").get_data(as_text=True)
+
+
+def _login_with(client, supa, meta):
+    r = client.get("/v2/login")
+    challenge = parse_qs(urlparse(r.headers["Location"]).query)["code_challenge"][0]
+    code = supa.issue(challenge, {"id": user_id_for("me@example.com"), "email": "me@example.com",
+                                  "user_metadata": meta})
+    client.get(f"/v2/auth/callback?code={code}")
+
+
+def test_account_button_shows_the_google_picture(client, supa):
+    pic = "https://lh3.googleusercontent.com/a/abc123=s96-c"
+    _login_with(client, supa, {"avatar_url": pic})
+    html = client.get("/v2/today").get_data(as_text=True)
+    assert f'<img src="{pic}" alt="" width="40" height="40" referrerpolicy="no-referrer">' in html
+    assert html.index('class="me"') < html.index('class="nav"')
+    # A changed picture follows on the next sign-in.
+    client.post("/v2/logout")
+    _login_with(client, supa, {"picture": pic + "x"})
+    assert pic + "x" in client.get("/v2/today").get_data(as_text=True)
+
+
+def test_account_button_ignores_a_picture_not_from_google(client, supa):
+    for bad in ("http://lh3.googleusercontent.com/a/x", "https://evil.example/x.png",
+                "https://googleusercontent.com.evil.example/x", "javascript:alert(1)"):
+        client.post("/v2/logout")
+        _login_with(client, supa, {"avatar_url": bad})
+        html = client.get("/v2/today").get_data(as_text=True)
+        assert bad not in html, bad
+        assert '<span class="initial">M</span>' in html, bad  # the email's initial instead

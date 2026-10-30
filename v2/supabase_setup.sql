@@ -47,8 +47,11 @@ CREATE TABLE IF NOT EXISTS users (
 	id VARCHAR NOT NULL, 
 	email VARCHAR NOT NULL, 
 	created FLOAT NOT NULL, 
+	avatar_url VARCHAR, 
 	PRIMARY KEY (id)
 );
+-- Added later; the app also runs this on start.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 
 CREATE INDEX IF NOT EXISTS ix_users_email ON users (email);
 
