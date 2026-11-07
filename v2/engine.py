@@ -67,6 +67,34 @@ def pick(backlog: list[dict], budget_minutes: int, intent: str = "", oldest: boo
     return picks, [e for e in backlog if id(e) not in picked]
 
 
+def refill(kept: list[dict], pool: list[dict], budget_minutes: int, oldest: bool = False) -> list[dict]:
+    """Fill the time a removed pick freed (a pick marked "Already heard"), leaving every
+    other pick exactly where it is. Same rules as pick(): one episode per show first, a
+    second from a show only when nothing from another show fits, never over the budget.
+    `kept` are the picks that stay; `pool` is what may be added (the skips, minus anything
+    heard). Returns only the episodes to add."""
+    ordered = _oldest_first(pool) if oldest else _newest_first(pool)
+    total = sum(p["duration_min"] for p in kept)
+    shows_used = {_show_key(p) for p in kept}
+    added = []
+
+    for ep in ordered:
+        if _show_key(ep) not in shows_used and total + ep["duration_min"] <= budget_minutes:
+            added.append(ep)
+            total += ep["duration_min"]
+            shows_used.add(_show_key(ep))
+    chosen = {id(a) for a in added}
+    for ep in ordered:
+        if id(ep) not in chosen and total + ep["duration_min"] <= budget_minutes:
+            added.append(ep)
+            chosen.add(id(ep))
+            total += ep["duration_min"]
+
+    if total > budget_minutes:
+        raise AssertionError(f"{engine_name(oldest)} refill went over budget: {total} > {budget_minutes} min")
+    return added
+
+
 def unused_time(picks: list[dict], skips: list[dict], budget_minutes: int) -> dict | None:
     """Why time is left over, when more than UNUSED_NOTE_MIN minutes are.
 

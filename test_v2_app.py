@@ -731,7 +731,9 @@ def test_heard_episodes_disappear(client):
 
     r = client.post("/v2/heard", data={"run": run_id, "episode": first})
     assert r.status_code == 302
-    assert "Marked as heard" in client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    assert " as heard." in html, "the page says what happened"
+    assert first not in {p["id"] for p in db.get_run(run_id, user_id_for("me@example.com"))["payload"]["picks"]}
 
     again, _ = run_today(client, 600)
     seen = {e["id"] for e in again["payload"]["picks"] + again["payload"]["skips"]}
@@ -1255,6 +1257,7 @@ def test_every_v2_post_without_a_valid_token_is_rejected(client, supa):
         ("/v2/shows/remove", {"itunes_id": "101"}),
         ("/v2/today", {"minutes": "30"}),
         ("/v2/heard", {"run": run_id, "episode": "a1"}),
+        ("/v2/run/extend", {"run": run_id, "episode": "a2"}),
         ("/v2/feedback", {"run": run_id, "verdict": "yes"}),
         ("/v2/account/delete", {"confirm": "DELETE"}),
         ("/v2/logout", {}),
@@ -1676,3 +1679,96 @@ def test_the_preferences_column_is_added_to_an_existing_database(tmp_path):
     with eng.connect() as c:
         row = c.execute(text("SELECT listening_speed, focus FROM preferences")).one()
     assert tuple(row) == (1.5, "newest"), "an existing row keeps working, as the newest rule"
+
+
+# --- "Already heard" swaps the pick; no fit offers a little more time ------------------------
+
+def _picks_of(run_id, email="me@example.com"):
+    return [p["id"] for p in db.get_run(run_id, user_id_for(email))["payload"]["picks"]]
+
+
+def test_already_heard_swaps_in_another_episode_that_fits(client):
+    login(client)
+    add(client, "101", "102")
+    run, run_id = run_today(client, 50)
+    assert _picks_of(run_id) == ["a1", "b1"], "20 + 12 min of 50"
+
+    client.post("/v2/heard", data={"run": run_id, "episode": "a1"})
+    r = db.get_run(run_id, user_id_for("me@example.com"))
+    assert [p["id"] for p in r["payload"]["picks"]] == ["b1", "b2"], "the other pick stays; B two (33) fills the gap"
+    assert sum(p["duration_min"] for p in r["payload"]["picks"]) <= r["budget"] == 50
+    assert "a1" not in json.dumps(r["payload"]["skips"]) and "b2" not in json.dumps(r["payload"]["skips"])
+    html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    assert "as heard. Added instead: B two." in " ".join(html.split())
+    assert '<script>alert("x")</script>' not in html, "the heard title is escaped"
+    # Doing it again changes nothing (the episode is no longer in the run).
+    client.post("/v2/heard", data={"run": run_id, "episode": "a1"})
+    assert _picks_of(run_id) == ["b1", "b2"]
+
+
+def test_already_heard_on_a_skip_just_removes_it(client):
+    login(client)
+    add(client, "101", "102")
+    _, run_id = run_today(client, 50)
+    client.post("/v2/heard", data={"run": run_id, "episode": "a2"})  # a safe to skip episode
+    r = db.get_run(run_id, user_id_for("me@example.com"))
+    assert [p["id"] for p in r["payload"]["picks"]] == ["a1", "b1"], "picks untouched"
+    assert "a2" not in json.dumps(r["payload"]["skips"]) + json.dumps(r["payload"]["longer"])
+    assert not r["payload"].get("swaps")
+
+
+def test_when_nothing_fits_the_page_offers_to_add_time_and_only_on_a_tap(client):
+    login(client)
+    add(client, "102", "103")
+    run, run_id = run_today(client, 30)
+    assert _picks_of(run_id) == ["c1", "b1"], "8 + 12 min of 30"
+
+    client.post("/v2/heard", data={"run": run_id, "episode": "c1"})
+    r = db.get_run(run_id, user_id_for("me@example.com"))
+    assert [p["id"] for p in r["payload"]["picks"]] == ["b1"] and r["budget"] == 30, "time never grows by itself"
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert "Nothing else fits the 8 min it freed. See below if you have a little longer." in html
+    assert "Add 7 min and hear this" in html and "Add 15 min and hear this" in html
+
+    # An episode this run did not offer cannot be added (c3 is 90 min).
+    client.post("/v2/run/extend", data={"run": run_id, "episode": "c3"})
+    client.post("/v2/run/extend", data={"run": run_id, "episode": "never-shown"})
+    assert _picks_of(run_id) == ["b1"]
+
+    client.post("/v2/run/extend", data={"run": run_id, "episode": "c2"})
+    r = db.get_run(run_id, user_id_for("me@example.com"))
+    assert [p["id"] for p in r["payload"]["picks"]] == ["b1", "c2"]
+    assert r["budget"] == 37 and r["payload"]["asked_min"] == 30
+    assert sum(p["duration_min"] for p in r["payload"]["picks"]) <= r["budget"]
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert "about 37 of 37 min used" in html and "time raised from 30 min" in html
+
+
+def test_nobody_else_can_swap_or_stretch_my_run(client):
+    login(client, "mine@example.com")
+    add(client, "102", "103")
+    _, run_id = run_today(client, 30, email="mine@example.com")
+    client.post("/v2/heard", data={"run": run_id, "episode": "c1"})
+    before = db.get_run(run_id, user_id_for("mine@example.com"))
+    client.post("/v2/logout")
+
+    login(client, "other@example.com")
+    client.post("/v2/heard", data={"run": run_id, "episode": "b1"})
+    client.post("/v2/run/extend", data={"run": run_id, "episode": "c2"})
+    after = db.get_run(run_id, user_id_for("mine@example.com"))
+    assert after["payload"] == before["payload"] and after["budget"] == before["budget"] == 30
+    assert db.heard_ids(user_id_for("other@example.com")) == set(), "not even marked heard for them"
+    client.post("/v2/logout")
+    assert client.post("/v2/run/extend", data={"run": run_id, "episode": "c2"}).status_code == 302
+    assert db.get_run(run_id, user_id_for("mine@example.com"))["budget"] == 30, "signed out: no change"
+
+
+def test_a_backlog_run_refills_oldest_first(client):
+    login(client)
+    add(client, "101")  # a1 20 min (1 day old), a2 45 (3 days), a-old 10 (45 days)
+    client.post("/v2/preferences", data={"focus": "backlog", "action": "save"})
+    run, run_id = run_today(client, 30)
+    assert _picks_of(run_id) == ["a-old", "a1"]
+    client.post("/v2/heard", data={"run": run_id, "episode": "a-old"})
+    assert _picks_of(run_id) == ["a1"], "10 min freed; nothing else fits that"
+    assert db.get_run(run_id, user_id_for("me@example.com"))["engine"] == "oldest_first_varied"

@@ -518,6 +518,11 @@ def _pick(run_id: str, ep: dict, heard: bool, csrf: str, longer: bool = False) -
     )
     needs = (f'<br><span class="needs">Needs {about(ep["total_min"])} in total '
              f'({esc(ep["extra_min"])} more than you have)</span>' if longer else "")
+    # Only on a "little longer" card: the listener's tap is what raises the time, never the app.
+    stretch = (f"""<form method="post" action="/v2/run/extend" class="stretch">{_csrf(csrf)}
+      <input type="hidden" name="run" value="{esc(run_id)}">
+      <input type="hidden" name="episode" value="{esc(ep['id'])}">
+      <button>Add {esc(ep['extra_min'])} min and hear this</button></form>""" if longer else "")
     return f"""<div class="card{'' if longer else ' pick'}">
   <strong>{esc(ep['title'])}</strong><br>
   <span class="meta">{esc(ep['show'])} &middot; {about(ep['duration_min'])} &middot; {esc(ep.get('released'))}</span>{needs}
@@ -526,6 +531,7 @@ def _pick(run_id: str, ep: dict, heard: bool, csrf: str, longer: bool = False) -
     <a href="{esc(spotify_link(ep))}" target="_blank" rel="noopener">{_icon("spotify")}Open in Spotify</a>
     {heard_ctl}
   </div>
+  {stretch}
   <details class="more"><summary class="meta">Other apps</summary><div class="links">
     {_apple_link(ep)}
     <a href="{esc(youtube_link(ep))}" target="_blank" rel="noopener">{_icon("youtube")}Search on YouTube</a>
@@ -554,6 +560,17 @@ def _note_box(run_id: str, note: str | None, csrf: str) -> str:
 </form>"""
 
 
+def _swap_note(swap: dict, has_longer: bool) -> str:
+    """After "Already heard" on a pick: what replaced it, or why nothing did. Every value
+    is an episode title from a public feed, so it is escaped."""
+    heard = f"Marked &ldquo;{esc(swap.get('heard'))}&rdquo; as heard."
+    added = swap.get("added") or []
+    if added:
+        return f'<p class="ok">{heard} Added instead: {esc("; ".join(added))}.</p>'
+    more = " See below if you have a little longer." if has_longer else ""
+    return f'<p class="meta">{heard} Nothing else fits the {esc(swap.get("freed"))} min it freed.{more}</p>'
+
+
 def _at_speed(payload: dict) -> str:
     """Times on a run made at a faster speed are listening times: say so once."""
     speed = payload.get("speed") or 1.0
@@ -569,6 +586,8 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
     loading = int(p.get("older_loading") or 0)
     loading_note = (f'<p class="warn">Older episodes are still loading for {_count(loading, "show")}. '
                     "Pick again in a minute to include them.</p>" if loading else "")
+    swaps = "".join(_swap_note(s, bool(p.get("longer"))) for s in (p.get("swaps") or [])[-3:])
+    raised = (f" &middot; time raised from {esc(p['asked_min'])} min" if p.get("asked_min") else "")
 
     if picks:
         picks_html = "".join(_pick(run["id"], x, x["id"] in heard, csrf) for x in picks)
@@ -616,8 +635,8 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
                        + "".join(_pick(run["id"], x, x["id"] in heard, csrf, longer=True) for x in longer))
 
     return f"""<p class="meta">{_count(p['backlog_size'], "recent unheard episode")} across
-{_count(p['shows'], "show")} &middot; about {esc(used)} of {esc(budget)} min used{_at_speed(p)}</p>
-{failed_note(p.get('failed'), p['shows'])}{loading_note}
+{_count(p['shows'], "show")} &middot; about {esc(used)} of {esc(budget)} min used{_at_speed(p)}{raised}</p>
+{failed_note(p.get('failed'), p['shows'])}{loading_note}{swaps}
 <h2>Worth it now</h2>
 {'<p class="lead">Play these. Together they fit your time.</p>' if picks else ""}
 {picks_html}

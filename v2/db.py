@@ -653,6 +653,17 @@ def save_run(user_id: str, budget: int, engine_name: str, payload: dict) -> str:
     return run_id
 
 
+def update_run(user_id: str, run_id: str, budget: int, payload: dict) -> bool:
+    """Replace this run's picks (an "Already heard" swap, or time added on request). Only
+    the owner's run: the user id is part of the WHERE, so another user's run is untouched.
+    Returns whether a row changed."""
+    with _tx() as c:
+        res = c.execute(runs.update().where(runs.c.id == run_id, runs.c.user_id == user_id)
+                        .values(budget=budget, payload=json.dumps(payload, ensure_ascii=False)))
+    _memo().pop(("run", run_id), None)
+    return res.rowcount == 1
+
+
 def get_run(run_id: str, user_id: str):
     """Only the owner's run; anyone else gets None, same as a missing run. Its latest
     feedback verdict and note come back in the same query (and are memoised for

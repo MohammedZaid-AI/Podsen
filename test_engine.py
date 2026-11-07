@@ -226,3 +226,29 @@ def test_oldest_first_never_goes_over_the_budget_and_falls_back_to_a_second_epis
 def test_engine_names_tell_the_two_rules_apart():
     assert engine.engine_name() == "newest_first_varied" == engine.ENGINE_NAME
     assert engine.engine_name(oldest=True) == "oldest_first_varied" == engine.BACKLOG_ENGINE_NAME
+
+
+# --- refill: the time a heard pick freed ------------------------------------------------------
+
+def test_refill_keeps_the_other_picks_and_fills_only_what_was_freed():
+    kept = [ep("B1", "B", 12, "2026-10-30")]
+    pool = [ep("A2", "A", 45, "2026-10-29"), ep("B2", "B", 33, "2026-10-28"), ep("B3", "B", 61, "2026-10-26")]
+    added = engine.refill(kept, pool, 50)
+    assert ids(added) == ["B2"], "A2 (45) does not fit 38 min; a second B does, and nothing from another show fits"
+    assert sum(e["duration_min"] for e in kept + added) <= 50
+
+
+def test_refill_prefers_another_show_and_never_goes_over():
+    kept = [ep("A1", "A", 10, "2026-10-30")]
+    pool = [ep("A2", "A", 10, "2026-10-29"), ep("B1", "B", 10, "2026-10-01")]
+    assert ids(engine.refill(kept, pool, 20)) == ["B1"], "a different show beats a newer second A"
+    assert engine.refill(kept, [ep("C1", "C", 25, "2026-10-29")], 30) == [], "nothing fits: add nothing"
+    for budget in range(10, 80):  # a kept pick always fits the run's budget, so start at its length
+        added = engine.refill(kept, pool + [ep("C1", "C", 25, "2026-10-29")], budget)
+        assert sum(e["duration_min"] for e in kept + added) <= budget
+
+
+def test_refill_follows_the_same_order_as_the_run():
+    pool = [ep("A1", "A", 20, "2026-10-10"), ep("B1", "B", 20, "2026-08-01")]
+    assert ids(engine.refill([], pool, 20)) == ["A1"]
+    assert ids(engine.refill([], pool, 20, oldest=True)) == ["B1"], "a My backlog run refills oldest first"

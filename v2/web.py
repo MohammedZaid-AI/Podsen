@@ -20,7 +20,18 @@ VERDICTS = ("yes", "somewhat", "no")
 RUN_FIELDS = (
     "id", "title", "show", "duration_min", "released", "audio_url", "apple_url", "apple_episode_url",
     "raw_min",  # the episode's own length; duration_min is the time to hear it at the chosen speed
+    "itunes_id",  # lets a replacement pick get its exact Apple link and keeps one episode per show
 )
+
+
+def _slim(eps: list[dict]) -> list[dict]:
+    return [{k: e.get(k) for k in RUN_FIELDS} for e in eps]
+
+
+def _longer_options(picks: list[dict], skips: list[dict], budget: int) -> list[dict]:
+    """"If you have a little longer": skipped episodes that fit with a few more minutes."""
+    longer = links.add_apple_episode_urls(engine.a_little_longer(picks, skips, budget))
+    return [{**_slim([e])[0], "total_min": e["total_min"], "extra_min": e["extra_min"]} for e in longer]
 
 
 # --- session, CSRF ---------------------------------------------------------------------
@@ -364,7 +375,7 @@ def today_run(user):
     # Picks and "a little longer" options get play links, so only they need Apple's lookup.
     picks = links.add_apple_episode_urls(picks)
     longer = links.add_apple_episode_urls(longer)
-    slim = lambda eps: [{k: e.get(k) for k in RUN_FIELDS} for e in eps]  # noqa: E731
+    slim = _slim
     run_id = db.save_run(
         user["id"],
         minutes,
@@ -439,6 +450,54 @@ def heard(user):
     shown = {e["id"] for e in r["payload"]["picks"] + r["payload"]["skips"]}
     if episode in shown:
         db.mark_heard(user["id"], episode)
+        _after_heard(user, r, episode)
+    return redirect(f"/v2/run/{r['id']}")
+
+
+def _after_heard(user, r, episode: str) -> None:
+    """A pick marked heard is replaced: the other picks stay, and the time it freed is
+    refilled from the safe-to-skip list with the same rules (one per show, never over the
+    time). If nothing fits, the page says so and offers "a little longer" with a button."""
+    p = r["payload"]
+    heard_now = db.heard_ids(user["id"])
+    gone = next((x for x in p["picks"] if x["id"] == episode), None)
+    kept = [x for x in p["picks"] if x["id"] != episode]
+    pool = [x for x in p["skips"] if x["id"] not in heard_now]  # heard ones leave the skips too
+    added = []
+    if gone is not None:
+        oldest = r["engine"] == engine.BACKLOG_ENGINE_NAME
+        added = _slim(links.add_apple_episode_urls(engine.refill(kept, pool, r["budget"], oldest)))
+        taken = {x["id"] for x in added}
+        pool = [x for x in pool if x["id"] not in taken]
+        p["swaps"] = (p.get("swaps") or [])[-4:] + [
+            {"heard": gone["title"], "freed": gone["duration_min"], "added": [x["title"] for x in added]}]
+    p["picks"], p["skips"] = kept + added, pool
+    p["longer"] = _longer_options(p["picks"], p["skips"], r["budget"])
+    db.update_run(user["id"], r["id"], r["budget"], p)
+
+
+@bp.post("/run/extend")
+@login_required
+def run_extend(user):
+    """"Add N min and hear this": raise this run's time to fit one of the "a little longer"
+    episodes. Only on the listener's tap, and only an episode this run offered, so the time
+    never grows by itself. The run keeps what was first asked in `asked_min`."""
+    r = _run_or_404(user, request.form.get("run"))
+    if r is None:
+        return redirect("/v2/today")
+    p, episode = r["payload"], request.form.get("episode") or ""
+    offered = {e["id"] for e in p.get("longer") or []}
+    ep = next((e for e in p["skips"] if e["id"] == episode and episode in offered), None)
+    if ep is None:
+        return redirect(f"/v2/run/{r['id']}")
+    new_budget = sum(x["duration_min"] for x in p["picks"]) + ep["duration_min"]
+    if not 0 < new_budget - r["budget"] <= engine.LONGER_EXTRA_MIN:  # recomputed, never trusted
+        return redirect(f"/v2/run/{r['id']}")
+    p["asked_min"] = p.get("asked_min") or r["budget"]
+    p["picks"] = p["picks"] + [ep]
+    p["skips"] = [x for x in p["skips"] if x["id"] != episode]
+    p["longer"] = _longer_options(p["picks"], p["skips"], new_budget)
+    db.update_run(user["id"], r["id"], new_budget, p)
     return redirect(f"/v2/run/{r['id']}")
 
 

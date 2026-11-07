@@ -17,7 +17,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 360 tests, no network
+python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 368 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
@@ -186,6 +186,15 @@ are labelled as searches.
   used up). "If you have a little longer" lists up to 2 skipped episodes that fit with
   at most 15 extra minutes (never a pick), saved with the run. Durations read
   "about N min" because feeds leave out inserted ads; budget math uses the raw number.
+  **Already heard** on a pick swaps it: the other picks stay, the freed time is refilled from
+  the run's skips with the same rules (`engine.refill`: one per show first, never over the
+  time), and the page says what was added, or "Nothing else fits the N min it freed" (payload
+  `swaps`). Marking a skip heard just removes it. Each "little longer" card has a button,
+  "Add N min and hear this" (`POST /v2/run/extend`): only on the listener's tap, only an
+  episode the run offered, the extra recomputed server side (at most 15 min); it raises the
+  run's budget to the new total and keeps the first ask in `asked_min`. Both rewrite the run
+  (`db.update_run`, owner only), so a run's `picks` are what is on screen now; feedback
+  keeps its own copy from when it was given. `RUN_FIELDS` now includes `itunes_id`.
 - **Backlog:** last `RECENT_DAYS` (30) of saved feeds minus heard (180 for "My backlog");
   undated episodes are left out. Feeds cached 1 h, Apple episode lists 6 h, trending 12 h,
   all in the DB. A feed cached before the 180 day window (no `keep_days` marker) is served
