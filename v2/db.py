@@ -113,6 +113,9 @@ preferences = Table(
     Column("wants", Text, nullable=False),
     Column("skips", Text, nullable=False),
     Column("updated_at", Float, nullable=False),
+    # "newest" or "backlog" (preferences.FOCUS). Added after launch: live Postgres gets it
+    # from ensure_schema and from the ALTER TABLE in v2/supabase_setup.sql.
+    Column("focus", String, nullable=False, server_default="newest"),
 )
 USER_TABLES = (preferences, feedback, runs, heard, shows)  # deletion order: children first
 
@@ -226,6 +229,11 @@ def ensure_schema(eng) -> None:
             c.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT"))
         elif "avatar_url" not in {r[1] for r in c.execute(text("PRAGMA table_info(users)"))}:
             c.execute(text("ALTER TABLE users ADD COLUMN avatar_url TEXT"))
+        if eng.dialect.name == "postgresql":
+            c.execute(text("ALTER TABLE preferences ADD COLUMN IF NOT EXISTS focus VARCHAR "
+                           "NOT NULL DEFAULT 'newest'"))
+        elif "focus" not in {r[1] for r in c.execute(text("PRAGMA table_info(preferences)"))}:
+            c.execute(text("ALTER TABLE preferences ADD COLUMN focus VARCHAR NOT NULL DEFAULT 'newest'"))
     if eng.dialect.name == "postgresql":
         with eng.begin() as c:
             for t in metadata.sorted_tables:
@@ -350,7 +358,8 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
     stmt = (select(users.c.id.label("u_id"), users.c.email.label("u_email"),
                    users.c.created.label("u_created"), users.c.avatar_url.label("u_avatar"), heard_agg.label("u_heard"),
                    preferences.c.listening_speed.label("p_speed"), preferences.c.wants.label("p_wants"),
-                   preferences.c.skips.label("p_skips"), *extra, *shows.c)
+                   preferences.c.skips.label("p_skips"), preferences.c.focus.label("p_focus"),
+                   *extra, *shows.c)
             .select_from(joined).where(users.c.id == user_id).order_by(shows.c.added))
     with _tx() as c:
         rows = list(c.execute(stmt))
@@ -365,7 +374,8 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
         heard_set = set(filter(None, (first["u_heard"] or "").split(HEARD_SEP)))
         result = (user, show_list, heard_set)
         memo[("prefs", user_id)] = (None if first["p_speed"] is None else
-                                    _prefs_row(first["p_speed"], first["p_wants"], first["p_skips"]))
+                                    _prefs_row(first["p_speed"], first["p_wants"], first["p_skips"],
+                                               first["p_focus"]))
         if run_id:
             memo[("run", run_id)] = (None if first["r_payload"] is None else
                                      {"id": run_id, "user_id": user_id,
@@ -421,8 +431,9 @@ def count_rows(user_id: str) -> dict:
 
 # --- listening preferences -----------------------------------------------------------------
 
-def _prefs_row(speed, wants, skips) -> dict:
-    return {"listening_speed": speed, "wants": json.loads(wants), "skips": json.loads(skips)}
+def _prefs_row(speed, wants, skips, focus) -> dict:
+    return {"listening_speed": speed, "wants": json.loads(wants), "skips": json.loads(skips),
+            "focus": focus or "newest"}
 
 
 def get_preferences(user_id: str) -> dict | None:
@@ -433,7 +444,7 @@ def get_preferences(user_id: str) -> dict | None:
         return memo[("prefs", user_id)]
     with _tx() as c:
         row = c.execute(select(preferences).where(preferences.c.user_id == user_id)).first()
-    out = None if row is None else _prefs_row(row.listening_speed, row.wants, row.skips)
+    out = None if row is None else _prefs_row(row.listening_speed, row.wants, row.skips, row.focus)
     memo[("prefs", user_id)] = out
     return out
 
@@ -445,7 +456,7 @@ def save_preferences(user_id: str, prefs: dict) -> None:
         _upsert(c, preferences, {
             "user_id": user_id, "listening_speed": prefs["listening_speed"],
             "wants": json.dumps(prefs["wants"]), "skips": json.dumps(prefs["skips"]),
-            "updated_at": time.time(),
+            "focus": prefs.get("focus") or "newest", "updated_at": time.time(),
         }, ["user_id"])
     _forget(user_id)
     _memo().pop(("prefs", user_id), None)

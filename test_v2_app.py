@@ -889,10 +889,10 @@ def test_preferences_are_saved_and_read_back(client):
                                              "skips": ["filler"]})
     assert r.status_code == 302 and r.headers["Location"].endswith("/v2/today")
     assert db.get_preferences(uid) == {"listening_speed": 1.5, "wants": ["learning", "business"],
-                                       "skips": ["filler"]}, "only offered answers, in their order"
+                                       "skips": ["filler"], "focus": "newest"}, "only offered answers, in their order"
     assert "How much time do you have" in client.get("/v2/today").get_data(as_text=True), "not asked again"
     account = client.get("/v2/account").get_data(as_text=True)
-    assert "Speed 1.5x. Wants: learning, business. Skips: filler." in account
+    assert "Speed 1.5x. Picks from: newest episodes. Wants: learning, business. Skips: filler." in account
     assert 'href="/v2/preferences"' in account and "Set my preferences</a>" in account
     form = client.get("/v2/preferences").get_data(as_text=True)
     assert 'name="speed" value="1.5" checked' in form and 'name="wants" value="learning" checked' in form
@@ -900,14 +900,15 @@ def test_preferences_are_saved_and_read_back(client):
 
     # Changed later from Account: replaced, not added.
     client.post("/v2/preferences", data={"speed": "2", "action": "save"})
-    assert db.get_preferences(uid) == {"listening_speed": 2.0, "wants": [], "skips": []}
+    assert db.get_preferences(uid) == {"listening_speed": 2.0, "wants": [], "skips": [], "focus": "newest"}
 
 
 def test_a_skipped_question_uses_the_defaults_and_is_not_asked_again(client):
     uid = login(client)
     add(client, "102")
     client.post("/v2/preferences", data={"action": "skip", "speed": "2", "wants": "learning"})
-    assert db.get_preferences(uid) == {"listening_speed": 1.0, "wants": [], "skips": []},         "Skip ignores whatever was ticked"
+    assert db.get_preferences(uid) == {"listening_speed": 1.0, "wants": [], "skips": [], "focus": "newest"}, \
+        "Skip ignores whatever was ticked"
     assert "How much time do you have" in client.get("/v2/today").get_data(as_text=True)
     run, run_id = run_today(client, 30)
     assert run["payload"]["speed"] == 1.0
@@ -943,7 +944,7 @@ def test_one_user_cannot_read_or_change_another_users_preferences(client):
     assert "Speed 2x" not in client.get("/v2/account").get_data(as_text=True)
     # Naming A in the form does nothing: the row is always the signed-in user's.
     client.post("/v2/preferences", data={"user_id": a, "speed": "1.5", "action": "save"})
-    assert db.get_preferences(a) == {"listening_speed": 2.0, "wants": ["learning"], "skips": []}
+    assert db.get_preferences(a) == {"listening_speed": 2.0, "wants": ["learning"], "skips": [], "focus": "newest"}
     assert db.get_preferences(b)["listening_speed"] == 1.5
     # Signed out: no form, no save.
     client.post("/v2/logout")
@@ -1571,3 +1572,107 @@ def test_account_button_ignores_a_picture_not_from_google(client, supa):
         html = client.get("/v2/today").get_data(as_text=True)
         assert bad not in html, bad
         assert '<span class="initial"><img class="mark" src="/static/podsen-logo.png"' in html, bad
+
+
+# --- "Which episodes should Podsen pick from?": newest (default) or my backlog ----------------
+
+def test_my_backlog_looks_back_six_months_and_picks_oldest_first(client):
+    uid = login(client)
+    add(client, "101")  # a1 20 min (1 day old), a2 45 min (3 days), a-old 10 min (45 days)
+
+    # Default: the last 30 days, newest first. The 45 day old episode is out of the window.
+    run, _ = run_today(client, 30)
+    assert [x["id"] for x in run["payload"]["picks"]] == ["a1"] and run["engine"] == "newest_first_varied"
+    assert run["payload"]["window_days"] == 30
+    assert "a-old" not in json.dumps(run["payload"])
+
+    r = client.post("/v2/preferences", data={"speed": "1", "focus": "backlog", "action": "save"})
+    assert r.status_code == 302
+    assert db.get_preferences(uid)["focus"] == "backlog"
+    today = " ".join(client.get("/v2/today").get_data(as_text=True).split())
+    assert "Picks come from your backlog, oldest first, from your 1 show (last 6 months)." in today
+
+    run, run_id = run_today(client, 30)
+    assert [x["id"] for x in run["payload"]["picks"]] == ["a-old", "a1"], "oldest first, 180 day window"
+    assert sum(x["duration_min"] for x in run["payload"]["picks"]) <= 30, "the hard cap still holds"
+    assert run["engine"] == "oldest_first_varied", "its results are never mixed with the newest rule"
+    assert run["payload"]["window_days"] == 180 and run["payload"]["older_loading"] == 0
+    assert run["payload"]["preferences"]["focus"] == "backlog"
+    account = client.get("/v2/account").get_data(as_text=True)
+    assert "Picks from: my backlog, oldest first." in account
+
+
+def test_the_focus_form_only_accepts_the_offered_answers(client):
+    uid = login(client)
+    add(client, "101")
+    client.post("/v2/preferences", data={"speed": "1", "focus": "everything", "action": "save"})
+    assert db.get_preferences(uid)["focus"] == "newest"
+    form = client.get("/v2/preferences").get_data(as_text=True)
+    assert 'name="focus" value="newest" checked' in form and 'name="focus" value="backlog">' in form
+    client.post("/v2/preferences", data={"focus": "backlog", "action": "save"})
+    form = client.get("/v2/preferences").get_data(as_text=True)
+    assert 'name="focus" value="backlog" checked' in form
+    # "Skip for now" saves the defaults whatever was ticked.
+    client.post("/v2/preferences", data={"focus": "backlog", "action": "skip"})
+    assert db.get_preferences(uid)["focus"] == "newest"
+
+
+def test_a_feed_cached_before_the_wider_window_is_refreshed_and_says_so(client, net):
+    login(client)
+    add(client, "101")
+    client.post("/v2/preferences", data={"speed": "1", "focus": "backlog", "action": "save"})
+    # Put back the kind of copy an older version cached: 44 days, no keep_days marker.
+    url = "https://feeds.example/a"
+    old = backlog.for_cache(rss.parse_feed(FEEDS[url]))
+    old.pop("keep_days")
+    old["episodes"] = [e for e in old["episodes"] if e["id"] != "a-old"]
+    db.store_cache("feed", {url: old})
+
+    run, run_id = run_today(client, 30)
+    assert run["payload"]["older_loading"] == 1, "not complete: the page must not look complete"
+    assert "a-old" not in json.dumps(run["payload"]["picks"])
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert "Older episodes are still loading for 1 show. Pick again in a minute" in html
+
+    # The background refresh (inline in tests) replaced the copy: the next run is complete.
+    run, run_id = run_today(client, 30)
+    assert run["payload"]["older_loading"] == 0
+    assert [x["id"] for x in run["payload"]["picks"]] == ["a-old", "a1"]
+    assert "still loading" not in client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+
+
+def test_a_newest_listener_is_not_told_older_episodes_are_loading(client):
+    login(client)
+    add(client, "101")
+    url = "https://feeds.example/a"
+    old = backlog.for_cache(rss.parse_feed(FEEDS[url]))
+    old.pop("keep_days")  # an older cached copy: fine for the 30 day window
+    db.store_cache("feed", {url: old})
+    run, _ = run_today(client, 30)
+    assert run["payload"]["older_loading"] == 0 and run["payload"]["window_days"] == 30
+
+
+def test_the_results_page_names_the_window_that_was_used(client):
+    login(client)
+    add(client, "104")  # one 15 minute episode
+    client.post("/v2/preferences", data={"focus": "backlog", "action": "save"})
+    run, run_id = run_today(client, 60)
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert "That's every unheard episode from the last 6 months." in html
+
+
+def test_the_preferences_column_is_added_to_an_existing_database(tmp_path):
+    from sqlalchemy import create_engine, text
+
+    eng = create_engine(f"sqlite:///{(tmp_path / 'old.db').as_posix()}")
+    with eng.begin() as c:  # how the tables looked before the focus column existed
+        c.execute(text("CREATE TABLE users (id VARCHAR PRIMARY KEY, email VARCHAR NOT NULL, "
+                       "created FLOAT NOT NULL, avatar_url VARCHAR)"))
+        c.execute(text("CREATE TABLE preferences (user_id VARCHAR PRIMARY KEY, listening_speed FLOAT "
+                       "NOT NULL, wants TEXT NOT NULL, skips TEXT NOT NULL, updated_at FLOAT NOT NULL)"))
+        c.execute(text("INSERT INTO preferences VALUES ('u1', 1.5, '[]', '[]', 1.0)"))
+    db.ensure_schema(eng)
+    db.ensure_schema(eng)  # running it again changes nothing
+    with eng.connect() as c:
+        row = c.execute(text("SELECT listening_speed, focus FROM preferences")).one()
+    assert tuple(row) == (1.5, "newest"), "an existing row keeps working, as the newest rule"

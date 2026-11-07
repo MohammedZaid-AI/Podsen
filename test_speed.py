@@ -416,3 +416,26 @@ def test_episodes_table_is_in_the_setup_sql_with_rls():
     assert "CREATE TABLE IF NOT EXISTS episodes (" in sql
     assert "PRIMARY KEY (feed_url, guid)" in sql
     assert 'ALTER TABLE "episodes" ENABLE ROW LEVEL SECURITY;' in sql
+
+
+def test_the_cache_reaches_back_far_enough_for_my_backlog_and_records_how_far():
+    from datetime import date
+
+    parsed = {"show": "S", "episodes": [
+        {"id": "half-year", "released": "2026-05-01", "duration_min": 10},   # about 169 days before
+        {"id": "too-old", "released": "2025-01-01", "duration_min": 10}]}
+    out = backlog.for_cache(parsed, today=date(2026, 10, 17))
+    assert [e["id"] for e in out["episodes"]] == ["half-year"]
+    assert out["keep_days"] == backlog.CACHE_DAYS == 194
+
+
+def test_preferences_focus_and_window_labels():
+    from v2 import preferences
+
+    assert preferences.clean(1, [], [])["focus"] == "newest"
+    assert preferences.clean(1, [], [], "backlog")["focus"] == "backlog"
+    assert preferences.clean(1, [], [], "<script>")["focus"] == "newest"
+    assert preferences.focus_of(None) == "newest" and preferences.focus_of({"focus": "x"}) == "newest"
+    assert preferences.window_label(30) == "last 30 days" and preferences.window_label(180) == "last 6 months"
+    assert "180" not in preferences.describe({"wants": ["learning"], "skips": [], "focus": "backlog"}), \
+        "no number ever goes into the prompt sentence"

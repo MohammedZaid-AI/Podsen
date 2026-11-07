@@ -199,3 +199,30 @@ def test_wants_and_skips_go_into_the_llm_prompt_as_plain_words_without_numbers()
     assert line in user and "2x" not in user and "speed" not in user.lower()
     _, plain = rank.build_prompt(fitting, 30, 40, 100)
     assert "Listener" not in plain, "no preferences: the prompt is unchanged"
+
+
+# --- "My backlog": the same rules, oldest first ----------------------------------------------
+
+def test_oldest_first_fills_with_the_oldest_episode_of_each_show_first():
+    backlog = [ep("A1", "A", 20, "2026-10-10"), ep("A2", "A", 20, "2026-08-01"),
+               ep("B1", "B", 20, "2026-09-01"), ep("B2", "B", 20, "2026-10-15")]
+    picks, skips = engine.pick(backlog, 40, oldest=True)
+    assert ids(picks) == ["A2", "B1"], "oldest of each show, one per show"
+    assert ids(skips) == ["A1", "B2"]
+    picks, _ = engine.pick(backlog, 40)
+    assert ids(picks) == ["B2", "A1"], "the default is unchanged: newest first"
+
+
+def test_oldest_first_never_goes_over_the_budget_and_falls_back_to_a_second_episode():
+    backlog = [ep("A1", "A", 20, "2026-07-01"), ep("A2", "A", 15, "2026-08-01"),
+               ep("B1", "B", 90, "2026-06-01")]
+    picks, _ = engine.pick(backlog, 40, oldest=True)
+    assert ids(picks) == ["A1", "A2"], "B1 is the oldest but cannot fit, so A gives a second episode"
+    for budget in range(1, 130):
+        picks, _ = engine.pick(backlog, budget, oldest=True)
+        assert sum(p["duration_min"] for p in picks) <= budget
+
+
+def test_engine_names_tell_the_two_rules_apart():
+    assert engine.engine_name() == "newest_first_varied" == engine.ENGINE_NAME
+    assert engine.engine_name(oldest=True) == "oldest_first_varied" == engine.BACKLOG_ENGINE_NAME

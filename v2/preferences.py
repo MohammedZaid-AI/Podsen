@@ -11,10 +11,15 @@ import math
 SPEEDS = (1.0, 1.5, 2.0)
 WANTS = ("learning", "news and current events", "entertainment", "stories", "business")
 SKIPS = ("filler", "long interviews", "old news", "promo-heavy shows")
-DEFAULTS = {"listening_speed": 1.0, "wants": [], "skips": []}
+# Which episodes to pick from. "newest": the last 30 days, newest first (the default).
+# "backlog": the last 180 days, oldest first, for people who want to clear what piled up.
+# The window and the order are enforced in code (backlog.build, engine.pick), never in a prompt.
+FOCUS = ("newest", "backlog")
+FOCUS_DAYS = {"newest": 30, "backlog": 180}
+DEFAULTS = {"listening_speed": 1.0, "wants": [], "skips": [], "focus": "newest"}
 
 
-def clean(speed, wants, skips) -> dict:
+def clean(speed, wants, skips, focus=None) -> dict:
     """Only the offered answers, in the offered order. Anything else becomes the default."""
     try:
         speed = float(speed)
@@ -24,7 +29,19 @@ def clean(speed, wants, skips) -> dict:
         "listening_speed": speed if speed in SPEEDS else 1.0,
         "wants": [w for w in WANTS if w in set(wants or [])],
         "skips": [s for s in SKIPS if s in set(skips or [])],
+        "focus": focus if focus in FOCUS else "newest",
     }
+
+
+def focus_of(prefs: dict | None) -> str:
+    """The saved focus, "newest" for anyone who never chose (or an old row without one)."""
+    focus = (prefs or {}).get("focus")
+    return focus if focus in FOCUS else "newest"
+
+
+def window_label(days: int) -> str:
+    """"last 30 days" or "last 6 months": how far back a run looked."""
+    return f"last {days // 30} months" if days >= 60 else f"last {days} days"
 
 
 def speed_label(speed: float) -> str:

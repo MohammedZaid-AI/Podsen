@@ -119,9 +119,13 @@ CREATE TABLE IF NOT EXISTS preferences (
 	wants TEXT NOT NULL,
 	skips TEXT NOT NULL,
 	updated_at FLOAT NOT NULL,
+	focus VARCHAR NOT NULL DEFAULT 'newest',
 	PRIMARY KEY (user_id),
 	FOREIGN KEY(user_id) REFERENCES users (id)
 );
+-- "newest" (last 30 days, newest first) or "backlog" (last 180 days, oldest first).
+-- Added after launch: run this once on a database that already has the table.
+ALTER TABLE preferences ADD COLUMN IF NOT EXISTS focus VARCHAR NOT NULL DEFAULT 'newest';
 
 -- Lock every table to the API: RLS on, no policies.
 

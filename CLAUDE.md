@@ -17,7 +17,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 325 tests, no network
+python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 360 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
@@ -167,19 +167,30 @@ are labelled as searches.
   time (minutes / speed, rounded UP) so the budget stays a hard cap; `raw_min` keeps the real
   length. Wants/skips go only into the LLM prompt (`rank.rank(listener=...)`, no numbers);
   the live rule picker ignores them. Runs store `speed` and `preferences`.
+  **Focus** (`preferences.FOCUS`, column `preferences.focus`, default `newest`): "Newest
+  episodes" (last 30 days, newest first) or "My backlog" (last 180 days, oldest first),
+  asked with the other questions and changeable from Account. It came from a tester who
+  wanted to clear his backlog, not read new releases. Window and order are enforced in code
+  (`backlog.build(days=)`, `engine.pick(oldest=)`); no number reaches the prompt. Runs store
+  `window_days`.
 - **One add path:** `_add_shows()` in `web.py` (single Add and Add selected) looks up
   every feed URL from Apple; the form's own values are never stored.
 - **Pick rule (`newest_first_varied`):** newest-first fill, at most one episode per
   show; a second from the same show only when nothing from another show fits. It is
   the app's own rule; `baselines.newest_first` stays the plain Phase 0 baseline, and
-  runs/feedback record `engine.ENGINE_NAME` so each result stays tied to its rule.
+  runs/feedback record `engine.ENGINE_NAME` so each result stays tied to its rule. "My
+  backlog" listeners get the same rule oldest first, recorded as `oldest_first_varied`
+  (`engine.engine_name(oldest)`), so their ratings never mix with the newest rule's.
 - **Results page:** with more than 5 min unused, a line says why ("27 min left. Nothing
   else fits. Your shortest unheard episode is about 31 min." — or that the backlog is
   used up). "If you have a little longer" lists up to 2 skipped episodes that fit with
   at most 15 extra minutes (never a pick), saved with the run. Durations read
   "about N min" because feeds leave out inserted ads; budget math uses the raw number.
-- **Backlog:** last `RECENT_DAYS` (30) of saved feeds minus heard; undated episodes
-  are left out. Feeds cached 1 h, Apple episode lists 6 h, trending 12 h, all in the DB.
+- **Backlog:** last `RECENT_DAYS` (30) of saved feeds minus heard (180 for "My backlog");
+  undated episodes are left out. Feeds cached 1 h, Apple episode lists 6 h, trending 12 h,
+  all in the DB. A feed cached before the 180 day window (no `keep_days` marker) is served
+  at once, refreshed immediately in the background, and the results page says "Older
+  episodes are still loading" instead of looking complete (`older_loading`).
 
 ## Speed
 
@@ -198,8 +209,10 @@ apple=0/0ms` - path only (never the query string: `?code=`, `?key=`), no emails.
   however old, and refreshed in the background (`v2/refresh.py`). Only a cache miss
   makes the user wait. Adding a show warms its caches in the background. Tests run
   refreshes inline (conftest) or record them (`refresh.MODE = "record"`).
-- **The feed cache holds only what picking uses:** last 30 + 14 days, no
-  descriptions (`backlog.for_cache`). Full feeds were up to 1.5 MB per read.
+- **The feed cache holds only what picking uses:** last 180 + 14 days (the widest window a
+  listener can choose, `backlog.CACHE_DAYS`), no descriptions (`backlog.for_cache`). Full
+  feeds were up to 1.5 MB per read. Widening it from 44 days grows every cached read for
+  daily shows: measure `GET /v2/today` and "Find picks" timing after deploy.
 - **Descriptions live in the `episodes` table** (feed URL + guid, every episode, stored
   once, never rewritten), written only in the background: by `backlog.refresh_feed`,
   or queued after a cache-miss fetch. For later layers (`db.episode_descriptions`);

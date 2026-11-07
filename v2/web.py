@@ -233,8 +233,9 @@ def _today_page(user, error=None, status=200, note=None):
     trend = None
     if n < app_views.MIN_SHOWS:  # only a new user needs suggestions here
         trend = trending.get(request.args.get("country") or request.form.get("country"))
+    focus = preferences.focus_of(db.get_preferences(user["id"]))
     body = app_views.today_form(n, error, _csrf_token(), trending=trend,
-                                have={s["itunes_id"] for s in shows_list}, note=note)
+                                have={s["itunes_id"] for s in shows_list}, note=note, focus=focus)
     return _page("Podsen · today", body, status, logged_in=True)
 
 
@@ -349,12 +350,16 @@ def today_run(user):
     if minutes is None:
         return _today_page(user, error="Time must be a whole number of minutes from 1 to 600.", status=400)
 
-    bl = backlog.build(user["id"])
     prefs = db.get_preferences(user["id"]) or preferences.DEFAULTS
     speed = prefs["listening_speed"]
+    focus = preferences.focus_of(prefs)
+    days = preferences.FOCUS_DAYS[focus]
+    bl = backlog.build(user["id"], days=days)
     # Speed changes the time math only: the rule picker gets each episode's listening time
-    # at that speed (rounded up), so its budget check stays a hard cap. Its logic is unchanged.
-    picks, skips = engine.pick(preferences.at_speed(bl["episodes"], speed), minutes)
+    # at that speed (rounded up), so its budget check stays a hard cap. "My backlog" changes
+    # the window (180 days) and the fill order (oldest first), nothing else.
+    oldest = focus == "backlog"
+    picks, skips = engine.pick(preferences.at_speed(bl["episodes"], speed), minutes, oldest=oldest)
     longer = engine.a_little_longer(picks, skips, minutes)
     # Picks and "a little longer" options get play links, so only they need Apple's lookup.
     picks = links.add_apple_episode_urls(picks)
@@ -363,7 +368,7 @@ def today_run(user):
     run_id = db.save_run(
         user["id"],
         minutes,
-        engine.ENGINE_NAME,
+        engine.engine_name(oldest),
         {
             "picks": slim(picks),
             "skips": slim(skips),
@@ -373,6 +378,8 @@ def today_run(user):
             "backlog_size": len(bl["episodes"]),
             "shows": bl["shows"],
             "speed": speed,
+            "window_days": days,  # how far back this run looked (the results page says so)
+            "older_loading": bl["older_loading"],  # shows whose older episodes were still loading
             "preferences": prefs,  # kept with the run, for a future picker and evaluation
         },
     )
@@ -399,7 +406,7 @@ def preferences_save(user):
         prefs = preferences.clean(None, [], [])  # the defaults, as fresh lists
     else:
         prefs = preferences.clean(request.form.get("speed"), request.form.getlist("wants"),
-                                  request.form.getlist("skips"))
+                                  request.form.getlist("skips"), request.form.get("focus"))
     db.save_preferences(user["id"], prefs)
     return redirect("/v2/today")
 

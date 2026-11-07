@@ -357,7 +357,10 @@ def preferences_form(prefs: dict, csrf: str, first_time: bool) -> str:
     Account's "Set my preferences", filled in with the saved answers."""
     speeds = [(f"{v:g}", preferences.speed_label(v)) for v in preferences.SPEEDS]
     chosen_speed = {f"{prefs['listening_speed']:g}"}
-    intro = ("<p>Three quick questions so picks fit how you listen. All optional; you can "
+    focus = preferences.focus_of(prefs)
+    focuses = [("newest", "Newest episodes (last 30 days, newest first)"),
+               ("backlog", "My backlog (last 6 months, oldest first)")]
+    intro = ("<p>A few quick questions so picks fit how you listen. All optional; you can "
              "change them any time from Account.</p>" if first_time else "")
     later = ('<button class="secondary" name="action" value="skip">Skip for now</button>' if first_time
              else '<a class="btn secondary" href="/v2/account" style="background:#2a2c31;color:#e9e9ec">Cancel</a>')
@@ -366,6 +369,9 @@ def preferences_form(prefs: dict, csrf: str, first_time: bool) -> str:
 <form method="post" action="/v2/preferences" class="prefs">{_csrf(csrf)}
   <fieldset><legend>Listening speed</legend>
     {_choices("radio", "speed", speeds, chosen_speed)}
+  </fieldset>
+  <fieldset><legend>Which episodes should Podsen pick from?</legend>
+    {_choices("radio", "focus", focuses, {focus})}
   </fieldset>
   <fieldset><legend>What you want from podcasts <span class="meta">(pick any)</span></legend>
     {_choices("checkbox", "wants", [(w, w.capitalize()) for w in preferences.WANTS], prefs["wants"])}
@@ -385,14 +391,16 @@ def _prefs_summary(prefs: dict | None) -> str:
         return "Not set yet: Podsen uses 1x speed and no topic preferences."
     wants = ", ".join(prefs["wants"]) or "nothing chosen"
     skips = ", ".join(prefs["skips"]) or "nothing chosen"
+    focus = "my backlog, oldest first" if preferences.focus_of(prefs) == "backlog" else "newest episodes"
     return (f"Speed {esc(preferences.speed_label(prefs['listening_speed']))}. "
-            f"Wants: {esc(wants)}. Skips: {esc(skips)}.")
+            f"Picks from: {esc(focus)}. Wants: {esc(wants)}. Skips: {esc(skips)}.")
 
 
 # --- today -------------------------------------------------------------------------------
 
 def today_form(n_shows: int, error: str | None = None, csrf: str = "",
-               trending: dict | None = None, have: set | None = None, note: str | None = None) -> str:
+               trending: dict | None = None, have: set | None = None, note: str | None = None,
+               focus: str = "newest") -> str:
     if n_shows < MIN_SHOWS:
         trend = (trending_section(trending, have or set(), csrf, "today",
                                   f"Trending in {trending['label']}") if trending else "")
@@ -417,8 +425,16 @@ def today_form(n_shows: int, error: str | None = None, csrf: str = "",
   </div>
   <p class="busy-note" hidden aria-live="polite"></p>
 </form>
-<p class="meta" style="margin-top:20px">Picks come from the newest episodes from your
-{_count(n_shows, "show")} (last 30 days). The first time can take a few seconds.</p>"""
+<p class="meta" style="margin-top:20px">{_comes_from(focus, n_shows)} The first time can take a few seconds.
+You can change this under Account.</p>"""
+
+
+def _comes_from(focus: str, n_shows: int) -> str:
+    """The line under the time buttons: where this listener's picks come from."""
+    if focus == "backlog":
+        return (f"Picks come from your backlog, oldest first, from your {_count(n_shows, 'show')} "
+                f"({preferences.window_label(preferences.FOCUS_DAYS['backlog'])}).")
+    return f"Picks come from the newest episodes from your {_count(n_shows, 'show')} (last 30 days)."
 
 
 # --- results -----------------------------------------------------------------------------
@@ -469,7 +485,7 @@ def about(minutes) -> str:
     return f"about {esc(minutes)} min"
 
 
-def unused_note(picks, skips, budget) -> str:
+def unused_note(picks, skips, budget, days: int = 30) -> str:
     """Say why time is left over: never leave the user guessing at a gap."""
     info = engine.unused_time(picks, skips, budget)
     if not info:
@@ -479,7 +495,7 @@ def unused_note(picks, skips, budget) -> str:
         why = (f"Nothing else fits. Your shortest unheard episode is "
                f"{about(info['shortest'])}.")
     elif info["reason"] == "backlog_empty":
-        why = "That's every unheard episode from the last 30 days."
+        why = f"That's every unheard episode from the {preferences.window_label(days)}."
     else:
         why = "Some episodes that would fit were kept as safe to skip."
     return f'<p class="unused">{left} {why}</p>'
@@ -548,6 +564,11 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
     p = run["payload"]
     picks, skips, budget = p["picks"], p["skips"], run["budget"]
     used = sum(x["duration_min"] for x in picks)
+    days = int(p.get("window_days") or 30)  # runs made before the setting looked back 30 days
+    window = preferences.window_label(days)
+    loading = int(p.get("older_loading") or 0)
+    loading_note = (f'<p class="warn">Older episodes are still loading for {_count(loading, "show")}. '
+                    "Pick again in a minute to include them.</p>" if loading else "")
 
     if picks:
         picks_html = "".join(_pick(run["id"], x, x["id"] in heard, csrf) for x in picks)
@@ -556,9 +577,11 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
         if failed and len(failed) >= p["shows"]:
             picks_html = ""  # nothing loaded: failed_note above says so; never "inbox zero"
         elif failed:
-            picks_html = "<p>No unheard episodes from the last 30 days in the shows that loaded.</p>"
+            picks_html = f"<p>No unheard episodes from the {window} in the shows that loaded.</p>"
+        elif loading:
+            picks_html = ""  # the note above says older episodes are still loading: not "inbox zero"
         else:
-            picks_html = (f"<p>No unheard episodes from the last 30 days in your shows. "
+            picks_html = (f"<p>No unheard episodes from the {window} in your shows. "
                           "Inbox zero &mdash; nice.</p>")
     else:
         shortest = min(x["duration_min"] for x in skips)
@@ -583,7 +606,7 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
 </form>"""
 
     # Only under real picks: with no picks the warning above already says why.
-    unused = unused_note(picks, skips, budget) if picks else ""
+    unused = unused_note(picks, skips, budget, days) if picks else ""
     longer = p.get("longer") or []
     longer_html = ""
     if longer:
@@ -594,7 +617,7 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
 
     return f"""<p class="meta">{_count(p['backlog_size'], "recent unheard episode")} across
 {_count(p['shows'], "show")} &middot; about {esc(used)} of {esc(budget)} min used{_at_speed(p)}</p>
-{failed_note(p.get('failed'), p['shows'])}
+{failed_note(p.get('failed'), p['shows'])}{loading_note}
 <h2>Worth it now</h2>
 {'<p class="lead">Play these. Together they fit your time.</p>' if picks else ""}
 {picks_html}
@@ -605,7 +628,7 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
 {longer_html}
 <h2>Safe to skip</h2>
 {'<p class="lead">You can leave these for another day. Nothing is deleted.</p>' if skips else ""}
-{skips_html or '<p class="meta">Nothing else in your recent backlog.</p>'}
+{skips_html or '<p class="meta">Nothing else in your backlog.</p>'}
 <p style="margin-top:24px"><a class="btn" href="/v2/today">Pick again</a></p>"""
 
 

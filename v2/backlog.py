@@ -9,14 +9,18 @@ is returned in `failed` for the page to show; it is never silently left out.
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
-from v2 import db, refresh, rss, timing
+from v2 import db, preferences, refresh, rss, timing
 
 RECENT_DAYS = 30
 CACHE_SECONDS = 3600
-# The cache keeps only what picking uses: episodes from the last RECENT_DAYS plus
-# this margin, without descriptions (never shown in the app). A long-running show's
-# full feed was 1.5 MB per read from the database; its recent part is a few KB.
+# The cache keeps only what picking uses: episodes from the widest window a listener can
+# choose (preferences.FOCUS_DAYS, 180 days for "My backlog") plus this margin, without
+# descriptions (never shown in the app). A long-running show's full feed was 1.5 MB per
+# read from the database; six months of it is a few tens of KB.
 CACHE_MARGIN_DAYS = 14
+CACHE_DAYS = max(preferences.FOCUS_DAYS.values()) + CACHE_MARGIN_DAYS
+# What an entry cached before the wider window kept: RECENT_DAYS plus the margin.
+OLD_CACHE_DAYS = RECENT_DAYS + CACHE_MARGIN_DAYS
 
 
 def _fetch_parse(feed_url: str):
@@ -28,15 +32,16 @@ def _fetch_parse(feed_url: str):
 
 
 def for_cache(parsed: dict, today: date | None = None) -> dict:
-    """The part of a parsed feed worth caching (see CACHE_MARGIN_DAYS)."""
+    """The part of a parsed feed worth caching (see CACHE_DAYS). keep_days records how far
+    back this copy reaches, so build() can tell a copy made before the wider window."""
     today = today or date.today()
-    keep_from = (today - timedelta(days=RECENT_DAYS + CACHE_MARGIN_DAYS)).isoformat()
+    keep_from = (today - timedelta(days=CACHE_DAYS)).isoformat()
     eps = parsed.get("episodes") or []
     undated = sum(1 for e in eps if not e.get("released")) + int(parsed.get("undated") or 0)
     recent = [{k: v for k, v in e.items() if k != "description"} for e in eps
               if e.get("released") and e["released"] >= keep_from]
     return {"show": parsed.get("show"), "episodes": recent, "undated": undated,
-            "skipped_no_duration": parsed.get("skipped_no_duration", 0)}
+            "skipped_no_duration": parsed.get("skipped_no_duration", 0), "keep_days": CACHE_DAYS}
 
 
 def refresh_feed(feed_url: str) -> None:
@@ -69,23 +74,30 @@ def fetch_missing(feed_urls: list[str]) -> tuple[dict, dict]:
     return parsed, failed
 
 
-def build(user_id: int, today: date | None = None) -> dict:
+def build(user_id: int, today: date | None = None, days: int = RECENT_DAYS) -> dict:
+    """days: how far back to look (preferences.FOCUS_DAYS). A feed cached before the wider
+    window may not reach that far: it is served now, refreshed at once in the background,
+    and counted in "older_loading" so the results page says so instead of looking complete."""
     today = today or date.today()
     shows = db.list_shows(user_id)
     heard = db.heard_ids(user_id)
-    cutoff = (today - timedelta(days=RECENT_DAYS)).isoformat()
+    cutoff = (today - timedelta(days=days)).isoformat()
     # One query for every feed AND Apple cache row these shows need (links.py reads
     # the Apple ones later from the same request memo).
     db.prefetch_caches([s["feed_url"] for s in shows], [s["itunes_id"] for s in shows])
 
-    parsed, missing, stale = {}, [], 0
+    parsed, missing, stale, short = {}, [], 0, set()
     for s in shows:
         entry = db.cache_entry("feed", s["feed_url"])
         if entry is None:
             missing.append(s["feed_url"])
             continue
         parsed[s["feed_url"]], age = entry
-        if age > CACHE_SECONDS:  # serve it now, refresh it for next time
+        reaches = parsed[s["feed_url"]].get("keep_days") or OLD_CACHE_DAYS
+        too_short = reaches < days + CACHE_MARGIN_DAYS
+        if too_short:
+            short.add(s["feed_url"])
+        if age > CACHE_SECONDS or too_short:  # serve it now, refresh it for next time
             stale += refresh.schedule(("feed", s["feed_url"]), lambda u=s["feed_url"]: refresh_feed(u))
 
     fetched, failed_urls = fetch_missing(missing)
@@ -106,4 +118,4 @@ def build(user_id: int, today: date | None = None) -> dict:
             seen.add(ep["id"])
             episodes.append({**ep, "apple_url": s.get("apple_url"), "itunes_id": s["itunes_id"]})
     return {"episodes": episodes, "failed": failed, "shows": len(shows), "undated": undated,
-            "stale_refreshing": stale}
+            "stale_refreshing": stale, "older_loading": len(short - set(failed_urls))}

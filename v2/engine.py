@@ -15,6 +15,13 @@ LONGER_EXTRA_MIN = 15  # "If you have a little longer": at most this much over t
 LONGER_SHOWN = 2
 
 ENGINE_NAME = "newest_first_varied"
+# A listener who chose "My backlog" gets the same fill and variety rules, oldest first.
+# Its runs are recorded under this name so their results are never mixed with the newest rule.
+BACKLOG_ENGINE_NAME = "oldest_first_varied"
+
+
+def engine_name(oldest: bool = False) -> str:
+    return BACKLOG_ENGINE_NAME if oldest else ENGINE_NAME
 
 
 def _show_key(ep: dict) -> str:
@@ -26,9 +33,15 @@ def _newest_first(backlog: list[dict]) -> list[dict]:
     return sorted(backlog, key=lambda e: e.get("released") or "", reverse=True)
 
 
-def pick(backlog: list[dict], budget_minutes: int, intent: str = ""):
-    """Returns (picks, skips). sum(duration_min of picks) <= budget_minutes, always."""
-    ordered = _newest_first(backlog)
+def _oldest_first(backlog: list[dict]) -> list[dict]:
+    # Undated last (the backlog drops them anyway), ties keep backlog order.
+    return sorted(backlog, key=lambda e: (not e.get("released"), e.get("released") or ""))
+
+
+def pick(backlog: list[dict], budget_minutes: int, intent: str = "", oldest: bool = False):
+    """Returns (picks, skips). sum(duration_min of picks) <= budget_minutes, always.
+    oldest=True fills oldest first instead of newest first; every other rule is the same."""
+    ordered = _oldest_first(backlog) if oldest else _newest_first(backlog)
     picks, total, shows_used = [], 0, set()
 
     # Pass 1: newest episode that fits from each show, one per show.
@@ -49,7 +62,7 @@ def pick(backlog: list[dict], budget_minutes: int, intent: str = ""):
             total += ep["duration_min"]
 
     if total > budget_minutes:
-        raise AssertionError(f"{ENGINE_NAME} went over budget: {total} > {budget_minutes} min")
+        raise AssertionError(f"{engine_name(oldest)} went over budget: {total} > {budget_minutes} min")
     picked = {id(p) for p in picks}
     return picks, [e for e in backlog if id(e) not in picked]
 
