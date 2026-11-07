@@ -252,3 +252,9 @@ def test_refill_follows_the_same_order_as_the_run():
     pool = [ep("A1", "A", 20, "2026-10-10"), ep("B1", "B", 20, "2026-08-01")]
     assert ids(engine.refill([], pool, 20)) == ["A1"]
     assert ids(engine.refill([], pool, 20, oldest=True)) == ["B1"], "a My backlog run refills oldest first"
+
+
+def test_both_oldest_first_rules_refill_oldest_first():
+    assert engine.is_oldest_first(engine.BACKLOG_ENGINE_NAME) and engine.is_oldest_first(engine.SAVED_ENGINE_NAME)
+    assert not engine.is_oldest_first(engine.ENGINE_NAME)
+    assert len({engine.ENGINE_NAME, engine.BACKLOG_ENGINE_NAME, engine.SAVED_ENGINE_NAME}) == 3

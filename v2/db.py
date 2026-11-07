@@ -48,6 +48,24 @@ heard = Table(
     Column("episode_id", Text, primary_key=True),
     Column("ts", Float, nullable=False),
 )
+# Episodes a listener saved for later. A full copy of what the run showed (the feed cache
+# only keeps recent episodes, so a saved one must not depend on it). Owner only; leaves
+# the list when the episode is marked heard.
+saved = Table(
+    "saved", metadata,
+    Column("user_id", String, ForeignKey("users.id"), primary_key=True),
+    Column("episode_id", Text, primary_key=True),
+    Column("title", Text, nullable=False),
+    Column("show", Text, nullable=False),
+    Column("duration_min", Integer),
+    Column("released", String),
+    Column("audio_url", Text),
+    Column("apple_url", Text),
+    Column("apple_episode_url", Text),
+    Column("itunes_id", String),
+    Column("ts", Float, nullable=False),
+)
+SAVED_MAX = 300  # per user: a prototype's guard against a runaway list
 feed_cache = Table(
     "feed_cache", metadata,
     Column("feed_url", Text, primary_key=True),
@@ -117,7 +135,7 @@ preferences = Table(
     # from ensure_schema and from the ALTER TABLE in v2/supabase_setup.sql.
     Column("focus", String, nullable=False, server_default="newest"),
 )
-USER_TABLES = (preferences, feedback, runs, heard, shows)  # deletion order: children first
+USER_TABLES = (preferences, feedback, runs, saved, heard, shows)  # deletion order: children first
 
 
 # --- engine ------------------------------------------------------------------------------
@@ -295,7 +313,7 @@ def _memo() -> dict:
 
 
 def _forget(user_id: str) -> None:
-    for key in ("bundle", "shows", "heard"):
+    for key in ("bundle", "shows", "heard", "saved"):
         _memo().pop((key, user_id), None)
 
 
@@ -336,6 +354,8 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
         return memo[("bundle", user_id)]
     heard_agg = (select(func.aggregate_strings(heard.c.episode_id, HEARD_SEP))
                  .where(heard.c.user_id == user_id).scalar_subquery())
+    saved_agg = (select(func.aggregate_strings(saved.c.episode_id, HEARD_SEP))
+                 .where(saved.c.user_id == user_id).scalar_subquery())  # for "Saved" marks on cards
     extra = []
     if run_id:
         own = (runs.c.id == run_id) & (runs.c.user_id == user_id)
@@ -357,6 +377,7 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
                   apple_episodes_cache.c.payload.label("a_payload")]
     stmt = (select(users.c.id.label("u_id"), users.c.email.label("u_email"),
                    users.c.created.label("u_created"), users.c.avatar_url.label("u_avatar"), heard_agg.label("u_heard"),
+                   saved_agg.label("u_saved"),
                    preferences.c.listening_speed.label("p_speed"), preferences.c.wants.label("p_wants"),
                    preferences.c.skips.label("p_skips"), preferences.c.focus.label("p_focus"),
                    *extra, *shows.c)
@@ -373,6 +394,7 @@ def _bundle(user_id: str, run_id: str | None = None, trending_country: str | Non
                      if r._mapping["itunes_id"] is not None]
         heard_set = set(filter(None, (first["u_heard"] or "").split(HEARD_SEP)))
         result = (user, show_list, heard_set)
+        memo[("saved", user_id)] = set(filter(None, (first["u_saved"] or "").split(HEARD_SEP)))
         memo[("prefs", user_id)] = (None if first["p_speed"] is None else
                                     _prefs_row(first["p_speed"], first["p_wants"], first["p_skips"],
                                                first["p_focus"]))
@@ -495,7 +517,56 @@ def mark_heard(user_id: str, episode_id: str) -> None:
     with _tx() as c:
         _upsert(c, heard, {"user_id": user_id, "episode_id": episode_id, "ts": time.time()},
                 ["user_id", "episode_id"], update=False)
+        # A heard episode is not "for later" any more.
+        c.execute(delete(saved).where(saved.c.user_id == user_id, saved.c.episode_id == episode_id))
     _forget(user_id)
+
+
+# --- saved for later -----------------------------------------------------------------------
+
+def save_episode(user_id: str, ep: dict) -> bool:
+    """Save a copy of an episode a run showed this user. False when the list is full
+    (SAVED_MAX); saving the same episode twice is fine and keeps the first copy."""
+    with _tx() as c:
+        have = c.execute(select(saved.c.episode_id).where(
+            saved.c.user_id == user_id, saved.c.episode_id == ep["id"])).first()
+        count = c.execute(select(func.count()).select_from(saved).where(saved.c.user_id == user_id)).scalar()
+        if have is None and count >= SAVED_MAX:
+            return False
+        _upsert(c, saved, {
+            "user_id": user_id, "episode_id": ep["id"], "title": ep.get("title") or "",
+            "show": ep.get("show") or "", "duration_min": ep.get("raw_min") or ep.get("duration_min"),
+            "released": ep.get("released"), "audio_url": ep.get("audio_url"),
+            "apple_url": ep.get("apple_url"), "apple_episode_url": ep.get("apple_episode_url"),
+            "itunes_id": ep.get("itunes_id"), "ts": time.time(),
+        }, ["user_id", "episode_id"], update=False)
+    _forget(user_id)
+    return True
+
+
+def unsave_episode(user_id: str, episode_id: str) -> None:
+    """Only this user's own row: the user id is part of the WHERE."""
+    with _tx() as c:
+        c.execute(delete(saved).where(saved.c.user_id == user_id, saved.c.episode_id == episode_id))
+    _forget(user_id)
+
+
+def list_saved(user_id: str) -> list[dict]:
+    """This user's saved episodes, newest saved first, shaped like backlog episodes
+    (duration_min is the episode's own length)."""
+    with _tx() as c:
+        rows = c.execute(select(saved).where(saved.c.user_id == user_id).order_by(saved.c.ts.desc())).all()
+    return [{"id": r.episode_id, "title": r.title, "show": r.show, "duration_min": r.duration_min,
+             "released": r.released, "audio_url": r.audio_url, "apple_url": r.apple_url,
+             "apple_episode_url": r.apple_episode_url, "itunes_id": r.itunes_id} for r in rows]
+
+
+def saved_ids(user_id: str) -> set[str]:
+    memo = _memo()
+    if ("saved", user_id) in memo:  # brought along by the request's first query
+        return set(memo[("saved", user_id)])
+    with _tx() as c:
+        return {r.episode_id for r in c.execute(select(saved.c.episode_id).where(saved.c.user_id == user_id))}
 
 
 def heard_ids(user_id: str) -> set[str]:

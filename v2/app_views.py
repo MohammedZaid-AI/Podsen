@@ -124,7 +124,7 @@ def _csrf(token: str) -> str:
     return f'<input type="hidden" name="csrf_token" value="{esc(token)}">'
 
 
-NAV = (("/v2/today", "Today"), ("/v2/shows", "My shows"))
+NAV = (("/v2/today", "Today"), ("/v2/saved", "Saved"), ("/v2/shows", "My shows"))
 
 
 def account_button(me: dict | None, active: str = "") -> str:
@@ -485,7 +485,7 @@ def about(minutes) -> str:
     return f"about {esc(minutes)} min"
 
 
-def unused_note(picks, skips, budget, days: int = 30) -> str:
+def unused_note(picks, skips, budget, days: int = 30, from_saved: bool = False) -> str:
     """Say why time is left over: never leave the user guessing at a gap."""
     info = engine.unused_time(picks, skips, budget)
     if not info:
@@ -495,18 +495,31 @@ def unused_note(picks, skips, budget, days: int = 30) -> str:
         why = (f"Nothing else fits. Your shortest unheard episode is "
                f"{about(info['shortest'])}.")
     elif info["reason"] == "backlog_empty":
-        why = f"That's every unheard episode from the {preferences.window_label(days)}."
+        why = ("That's everything on your saved list." if from_saved
+               else f"That's every unheard episode from the {preferences.window_label(days)}.")
     else:
         why = "Some episodes that would fit were kept as safe to skip."
     return f'<p class="unused">{left} {why}</p>'
 
 
-def _pick(run_id: str, ep: dict, heard: bool, csrf: str, longer: bool = False) -> str:
+def _player(ep: dict) -> str:
+    """The in-page audio player: only an http(s) audio address from the feed is ever used."""
     audio = ep.get("audio_url")
-    player = (
+    return (
         f'<audio controls preload="none" src="{esc(audio)}"></audio>'
         if audio and urlparse(audio).scheme in ("http", "https")
         else '<p class="meta">No playable audio in this feed.</p>'
+    )
+
+
+def _pick(run_id: str, ep: dict, heard: bool, csrf: str, longer: bool = False, saved: bool = False) -> str:
+    player = _player(ep)
+    save_ctl = (
+        '<span class="meta ok">Saved</span>' if saved
+        else f"""<form method="post" action="/v2/saved/add">{_csrf(csrf)}
+      <input type="hidden" name="run" value="{esc(run_id)}">
+      <input type="hidden" name="episode" value="{esc(ep['id'])}">
+      <button class="secondary">Save for later</button></form>"""
     )
     heard_ctl = (
         '<span class="meta ok">Marked as heard</span>'
@@ -530,6 +543,7 @@ def _pick(run_id: str, ep: dict, heard: bool, csrf: str, longer: bool = False) -
   <div class="links">
     <a href="{esc(spotify_link(ep))}" target="_blank" rel="noopener">{_icon("spotify")}Open in Spotify</a>
     {heard_ctl}
+    {save_ctl}
   </div>
   {stretch}
   <details class="more"><summary class="meta">Other apps</summary><div class="links">
@@ -577,10 +591,13 @@ def _at_speed(payload: dict) -> str:
     return "" if speed == 1.0 else f" &middot; times at {esc(preferences.speed_label(speed))} speed"
 
 
-def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: str | None = None) -> str:
+def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: str | None = None,
+            saved: set | None = None) -> str:
     p = run["payload"]
     picks, skips, budget = p["picks"], p["skips"], run["budget"]
     used = sum(x["duration_min"] for x in picks)
+    saved = saved or set()
+    from_saved = p.get("source") == "saved"  # picked from the saved list, not from a window
     days = int(p.get("window_days") or 30)  # runs made before the setting looked back 30 days
     window = preferences.window_label(days)
     loading = int(p.get("older_loading") or 0)
@@ -590,7 +607,7 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
     raised = (f" &middot; time raised from {esc(p['asked_min'])} min" if p.get("asked_min") else "")
 
     if picks:
-        picks_html = "".join(_pick(run["id"], x, x["id"] in heard, csrf) for x in picks)
+        picks_html = "".join(_pick(run["id"], x, x["id"] in heard, csrf, saved=x["id"] in saved) for x in picks)
     elif not skips:
         failed = p.get("failed") or []
         if failed and len(failed) >= p["shows"]:
@@ -625,16 +642,18 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
 </form>"""
 
     # Only under real picks: with no picks the warning above already says why.
-    unused = unused_note(picks, skips, budget, days) if picks else ""
+    unused = unused_note(picks, skips, budget, days, from_saved) if picks else ""
     longer = p.get("longer") or []
     longer_html = ""
     if longer:
         longer_html = ('<h2>If you have a little longer</h2>'
                        '<p class="meta">Not picks: these fit if you have up to '
                        f'{engine.LONGER_EXTRA_MIN} more minutes.</p>'
-                       + "".join(_pick(run["id"], x, x["id"] in heard, csrf, longer=True) for x in longer))
+                       + "".join(_pick(run["id"], x, x["id"] in heard, csrf, longer=True, saved=x["id"] in saved)
+                                 for x in longer))
 
-    return f"""<p class="meta">{_count(p['backlog_size'], "recent unheard episode")} across
+    what = "saved episode" if from_saved else "recent unheard episode"
+    return f"""<p class="meta">{_count(p['backlog_size'], what)} across
 {_count(p['shows'], "show")} &middot; about {esc(used)} of {esc(budget)} min used{_at_speed(p)}{raised}</p>
 {failed_note(p.get('failed'), p['shows'])}{loading_note}{swaps}
 <h2>Worth it now</h2>
@@ -648,7 +667,62 @@ def results(run: dict, heard: set, verdict: str | None, csrf: str = "", note: st
 <h2>Safe to skip</h2>
 {'<p class="lead">You can leave these for another day. Nothing is deleted.</p>' if skips else ""}
 {skips_html or '<p class="meta">Nothing else in your backlog.</p>'}
-<p style="margin-top:24px"><a class="btn" href="/v2/today">Pick again</a></p>"""
+<p style="margin-top:24px"><a class="btn" href="{'/v2/saved' if from_saved else '/v2/today'}">Pick again</a></p>"""
+
+
+# --- saved for later ---------------------------------------------------------------------
+
+def _saved_card(ep: dict, csrf: str) -> str:
+    """One saved episode: play it, open it elsewhere, mark it heard, or take it off the list.
+    Everything from the stored copy is escaped; the links are built the same way as on a pick."""
+    forms = "".join(
+        f"""<form method="post" action="/v2/saved/{action}">{_csrf(csrf)}
+      <input type="hidden" name="episode" value="{esc(ep['id'])}">
+      <button class="secondary">{label}</button></form>""" for action, label in
+        (("heard", "Already heard"), ("remove", "Remove")))
+    return f"""<div class="card">
+  <strong>{esc(ep['title'])}</strong><br>
+  <span class="meta">{esc(ep['show'])} &middot; {about(ep['duration_min'])} &middot; {esc(ep.get('released'))}</span>
+  <details><summary class="meta">Play here</summary>{_player(ep)}</details>
+  <div class="links">
+    <a href="{esc(spotify_link(ep))}" target="_blank" rel="noopener">{_icon("spotify")}Open in Spotify</a>
+    {forms}
+  </div>
+  <details class="more"><summary class="meta">Other apps</summary><div class="links">
+    {_apple_link(ep)}
+    <a href="{esc(youtube_link(ep))}" target="_blank" rel="noopener">{_icon("youtube")}Search on YouTube</a>
+    <a href="{esc(amazon_music_link(ep))}" target="_blank" rel="noopener">{_icon("amazonmusic")}Search on Amazon Music</a>
+  </div></details>
+</div>"""
+
+
+def saved_page(items: list[dict], csrf: str, error: str | None = None, full: bool = False) -> str:
+    """The Saved list, and "Pick from my saved" for the time the listener has."""
+    if not items:
+        return f"""<h2>Saved for later</h2>
+<p>Nothing saved yet. Tap <strong>Save for later</strong> on any episode in your picks, and it
+waits here. Then Podsen can pick from just your saved episodes when you have time.</p>
+<p style="margin-top:20px"><a class="btn" href="/v2/today">Find picks</a></p>"""
+    full_note = ('<p class="warn">Your saved list is full. Remove some episodes to save more.</p>'
+                 if full else "")
+    return f"""<h2>Saved for later</h2>
+{full_note}<p class="lead">{_count(len(items), "episode")} you saved. Pick from just these when you have time.</p>
+{_error(error)}
+<form method="post" action="/v2/saved/pick" data-busy-note="Finding your picks...">{_csrf(csrf)}
+  <div class="row">
+    <button name="minutes" value="15">15 min</button>
+    <button name="minutes" value="30">30 min</button>
+    <button name="minutes" value="60">60 min</button>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <label class="custom">Other:
+      <input type="number" name="custom_minutes" min="1" max="600" value="45"> min</label>
+    <button class="secondary" name="minutes" value="custom">Pick</button>
+  </div>
+  <p class="busy-note" hidden aria-live="polite"></p>
+</form>
+<h2>Your list</h2>
+{"".join(_saved_card(e, csrf) for e in items)}"""
 
 
 # --- privacy -----------------------------------------------------------------------------
@@ -663,6 +737,8 @@ def privacy() -> str:
       stays on Google and is loaded from there.</li>
   <li><strong>The shows you chose</strong> (name and public feed address).</li>
   <li><strong>Episodes you marked as heard</strong>, so they stop being suggested.</li>
+  <li><strong>Episodes you saved for later</strong> (title, show, length and links), so your
+      list stays even after a show's feed moves on.</li>
   <li><strong>Your listening preferences</strong>, if you set them: listening speed, what
       you want from podcasts and what you usually skip.</li>
   <li><strong>Each set of picks we showed you and your feedback on it</strong>
@@ -696,7 +772,7 @@ browser for 30 days unless you log out.</p>
 <p><a class="btn secondary" href="/v2/preferences" style="background:#2a2c31;color:#e9e9ec">Set my preferences</a></p>
 <h2>Delete my account</h2>
 <p>This permanently deletes your account and all its data: your shows, heard episodes,
-preferences, picks, feedback and your sign-in record. It cannot be undone.</p>
+saved episodes, preferences, picks, feedback and your sign-in record. It cannot be undone.</p>
 {_error(error)}
 <form method="post" action="/v2/account/delete">{_csrf(csrf)}
   <label class="field"><span>Type DELETE to confirm</span>

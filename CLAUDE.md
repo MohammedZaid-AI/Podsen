@@ -17,7 +17,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 368 tests, no network
+python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 377 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
@@ -195,6 +195,13 @@ are labelled as searches.
   run's budget to the new total and keeps the first ask in `asked_min`. Both rewrite the run
   (`db.update_run`, owner only), so a run's `picks` are what is on screen now; feedback
   keeps its own copy from when it was given. `RUN_FIELDS` now includes `itunes_id`.
+- **Saved for later** (`saved` table, `/v2/saved`, nav "Saved"): "Save for later" on a pick or skip copies
+  the episode from the user's OWN run payload (never from form values) into `saved` (one row per user and
+  episode, `db.SAVED_MAX` = 300, then "Your saved list is full"). The Saved page lists them and picks from
+  just those for 15/30/60/custom minutes (`POST /v2/saved/pick`: `engine.pick(oldest=True)`, hard cap,
+  engine `saved_oldest_first_varied` so ratings never mix, payload `source: saved`). "Already heard"
+  (anywhere) removes the episode from Saved; account delete removes the rows. Not an import of Spotify or
+  YouTube playlists (no such data may be read).
 - **Backlog:** last `RECENT_DAYS` (30) of saved feeds minus heard (180 for "My backlog");
   undated episodes are left out. Feeds cached 1 h, Apple episode lists 6 h, trending 12 h,
   all in the DB. A feed cached before the 180 day window (no `keep_days` marker) is served

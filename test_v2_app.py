@@ -1258,6 +1258,10 @@ def test_every_v2_post_without_a_valid_token_is_rejected(client, supa):
         ("/v2/today", {"minutes": "30"}),
         ("/v2/heard", {"run": run_id, "episode": "a1"}),
         ("/v2/run/extend", {"run": run_id, "episode": "a2"}),
+        ("/v2/saved/add", {"run": run_id, "episode": "a1"}),
+        ("/v2/saved/remove", {"episode": "a1"}),
+        ("/v2/saved/heard", {"episode": "a1"}),
+        ("/v2/saved/pick", {"minutes": "30"}),
         ("/v2/feedback", {"run": run_id, "verdict": "yes"}),
         ("/v2/account/delete", {"confirm": "DELETE"}),
         ("/v2/logout", {}),
@@ -1772,3 +1776,149 @@ def test_a_backlog_run_refills_oldest_first(client):
     client.post("/v2/heard", data={"run": run_id, "episode": "a-old"})
     assert _picks_of(run_id) == ["a1"], "10 min freed; nothing else fits that"
     assert db.get_run(run_id, user_id_for("me@example.com"))["engine"] == "oldest_first_varied"
+
+
+# --- Saved for later --------------------------------------------------------------------------
+
+def _save(client, run_id, *episodes):
+    for e in episodes:
+        assert client.post("/v2/saved/add", data={"run": run_id, "episode": e}).status_code == 302
+
+
+def test_save_for_later_keeps_a_copy_and_the_page_shows_it(client):
+    uid = login(client)
+    add(client, "101", "102")
+    _, run_id = run_today(client, 50)  # picks a1 (title with HTML in it) and b1
+    html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    assert html.count("Save for later") >= 2 and 'href="/v2/saved"' in html, "a button per card, Saved in the nav"
+
+    _save(client, run_id, "a1")
+    [item] = db.list_saved(uid)
+    assert item["id"] == "a1" and item["title"] == TRICKY_TITLE and item["show"] == TRICKY_SHOW
+    assert item["duration_min"] == 20 and item["itunes_id"] == "101" and item["audio_url"].startswith("https://cdn.example/")
+    run_html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    assert 'class="meta ok">Saved</span>' in run_html and run_html.count("Save for later") == html.count("Save for later") - 1
+
+    page = client.get("/v2/saved").get_data(as_text=True)
+    assert "1 episode you saved" in page and "Pick from just these" in page and 'action="/v2/saved/pick"' in page
+    assert esc(TRICKY_TITLE) in page and TRICKY_TITLE not in page, "escaped, never raw"
+    assert 'href="https://open.spotify.com/search/' in page and "Search on YouTube" in page
+    _save(client, run_id, "a1")  # twice is fine
+    assert len(db.list_saved(uid)) == 1
+
+
+def test_only_an_episode_my_own_run_showed_can_be_saved(client):
+    mine = login(client, "mine@example.com")
+    add(client, "101", "102")
+    _, run_id = run_today(client, 50, email="mine@example.com")
+    _save(client, run_id, "never-shown")
+    assert db.list_saved(mine) == []
+    client.post("/v2/logout")
+
+    other = login(client, "other@example.com")
+    client.post("/v2/saved/add", data={"run": run_id, "episode": "a1"})  # someone else's run
+    assert db.list_saved(other) == [] and db.list_saved(mine) == []
+    client.post("/v2/logout")
+    assert client.post("/v2/saved/add", data={"run": run_id, "episode": "a1"}).status_code == 302
+    assert db.list_saved(mine) == [], "signed out: nothing saved"
+
+
+def test_remove_and_heard_only_touch_my_own_list(client):
+    a = login(client, "a@example.com")
+    add(client, "101", "102")
+    _, run_id = run_today(client, 50, email="a@example.com")
+    _save(client, run_id, "a1", "b1")
+    client.post("/v2/logout")
+
+    b = login(client, "b@example.com")
+    client.post("/v2/saved/remove", data={"episode": "a1"})
+    client.post("/v2/saved/heard", data={"episode": "b1"})
+    assert {e["id"] for e in db.list_saved(a)} == {"a1", "b1"}, "B changed nothing of A's"
+    assert db.heard_ids(b) == set() and db.heard_ids(a) == set()
+    client.post("/v2/logout")
+
+    login(client, "a@example.com")
+    client.post("/v2/saved/remove", data={"episode": "a1"})
+    assert [e["id"] for e in db.list_saved(a)] == ["b1"]
+    client.post("/v2/saved/heard", data={"episode": "b1"})
+    assert db.list_saved(a) == [] and "b1" in db.heard_ids(a), "heard takes it off the list"
+    client.post("/v2/saved/heard", data={"episode": "never-saved"})
+    assert "never-saved" not in db.heard_ids(a), "only an episode that is on the list"
+
+
+def test_marking_a_pick_heard_on_a_run_also_takes_it_off_the_saved_list(client):
+    uid = login(client)
+    add(client, "101", "102")
+    _, run_id = run_today(client, 50)
+    _save(client, run_id, "a1")
+    client.post("/v2/heard", data={"run": run_id, "episode": "a1"})
+    assert db.list_saved(uid) == []
+
+
+def test_pick_from_my_saved_is_oldest_first_and_never_over_the_time(client):
+    uid = login(client)
+    add(client, "102", "103")
+    _, big = run_today(client, 600)  # every episode shown, so any can be saved
+    _save(client, big, "b1", "b2", "c2")  # 12, 33 and 25 min; c2 is the oldest
+    r = client.post("/v2/saved/pick", data={"minutes": "40"})
+    assert r.status_code == 302
+    run_id = r.headers["Location"].rsplit("/", 1)[1]
+    run = db.get_run(run_id, uid)
+    assert [p["id"] for p in run["payload"]["picks"]] == ["c2", "b1"], "oldest first, one per show, fits 40"
+    assert sum(p["duration_min"] for p in run["payload"]["picks"]) <= run["budget"] == 40
+    assert run["engine"] == "saved_oldest_first_varied" and run["payload"]["source"] == "saved"
+    html = " ".join(client.get(f"/v2/run/{run_id}").get_data(as_text=True).split())
+    assert "3 saved episodes across 2 shows" in html and 'href="/v2/saved">Pick again' in html
+    assert "recent unheard" not in html and "Saved</span>" in html, "worded for the list; picks show as saved"
+
+    # A pick from the saved list can be swapped too, and refills oldest first.
+    client.post("/v2/heard", data={"run": run_id, "episode": "b1"})
+    run = db.get_run(run_id, uid)
+    assert [p["id"] for p in run["payload"]["picks"]] == ["c2"], "nothing saved fits the 12 min freed"
+    assert "b1" not in {e["id"] for e in db.list_saved(uid)}
+
+
+def test_pick_from_saved_needs_a_list_and_a_valid_time(client):
+    uid = login(client)
+    add(client, "101")
+    page = client.get("/v2/saved").get_data(as_text=True)
+    assert "Nothing saved yet" in page and 'action="/v2/saved/pick"' not in page
+    r = client.post("/v2/saved/pick", data={"minutes": "30"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/v2/saved"), "no list: no run"
+    assert db.all_feedback() == [] and not _run_count(uid)
+
+    _, run_id = run_today(client, 50)
+    _save(client, run_id, "a1")
+    n = _run_count(uid)
+    r = client.post("/v2/saved/pick", data={"minutes": "custom", "custom_minutes": "9999"})
+    assert r.status_code == 400 and "from 1 to 600" in r.get_data(as_text=True)
+    assert _run_count(uid) == n
+
+
+def _run_count(uid):
+    with db._tx() as c:
+        return c.execute(db.select(db.func.count()).select_from(db.runs).where(db.runs.c.user_id == uid)).scalar()
+
+
+def test_the_saved_list_has_a_limit_and_says_so(client, monkeypatch):
+    uid = login(client)
+    add(client, "101", "102")
+    _, run_id = run_today(client, 50)
+    monkeypatch.setattr(db, "SAVED_MAX", 1)
+    _save(client, run_id, "a1")
+    r = client.post("/v2/saved/add", data={"run": run_id, "episode": "b1"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/v2/saved?full=1")
+    assert [e["id"] for e in db.list_saved(uid)] == ["a1"]
+    assert "Your saved list is full" in client.get("/v2/saved?full=1").get_data(as_text=True)
+    _save(client, run_id, "a1")  # already on the list: still fine
+    assert [e["id"] for e in db.list_saved(uid)] == ["a1"]
+
+
+def test_deleting_the_account_deletes_the_saved_list(client):
+    uid = login(client)
+    add(client, "101", "102")
+    _, run_id = run_today(client, 50)
+    _save(client, run_id, "a1", "b1")
+    assert len(db.list_saved(uid)) == 2
+    r = client.post("/v2/account/delete", data={"confirm": "DELETE"})
+    assert r.status_code == 200 and db.list_saved(uid) == []

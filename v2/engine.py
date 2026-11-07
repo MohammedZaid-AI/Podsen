@@ -18,10 +18,18 @@ ENGINE_NAME = "newest_first_varied"
 # A listener who chose "My backlog" gets the same fill and variety rules, oldest first.
 # Its runs are recorded under this name so their results are never mixed with the newest rule.
 BACKLOG_ENGINE_NAME = "oldest_first_varied"
+# Picks made from only the listener's saved list: the same rule, oldest first, but a pool
+# the listener chose by hand, so its ratings are kept apart from both rules above.
+SAVED_ENGINE_NAME = "saved_oldest_first_varied"
 
 
 def engine_name(oldest: bool = False) -> str:
     return BACKLOG_ENGINE_NAME if oldest else ENGINE_NAME
+
+
+def is_oldest_first(name: str) -> bool:
+    """Whether a run's recorded rule fills oldest first (so a refill must too)."""
+    return name in (BACKLOG_ENGINE_NAME, SAVED_ENGINE_NAME)
 
 
 def _show_key(ep: dict) -> str:

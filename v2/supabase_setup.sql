@@ -63,6 +63,23 @@ CREATE TABLE IF NOT EXISTS heard (
 	FOREIGN KEY(user_id) REFERENCES users (id)
 );
 
+-- Episodes saved for later (a full copy of what a run showed). Added after launch.
+CREATE TABLE IF NOT EXISTS saved (
+	user_id VARCHAR NOT NULL,
+	episode_id TEXT NOT NULL,
+	title TEXT NOT NULL,
+	show TEXT NOT NULL,
+	duration_min INTEGER,
+	released VARCHAR,
+	audio_url TEXT,
+	apple_url TEXT,
+	apple_episode_url TEXT,
+	itunes_id VARCHAR,
+	ts FLOAT NOT NULL,
+	PRIMARY KEY (user_id, episode_id),
+	FOREIGN KEY(user_id) REFERENCES users (id)
+);
+
 CREATE TABLE IF NOT EXISTS runs (
 	id VARCHAR NOT NULL, 
 	user_id VARCHAR NOT NULL, 
@@ -148,3 +165,4 @@ ALTER TABLE "shows" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "feedback" ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE "preferences" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "saved" ENABLE ROW LEVEL SECURITY;

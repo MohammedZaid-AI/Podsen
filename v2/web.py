@@ -371,30 +371,30 @@ def today_run(user):
     # the window (180 days) and the fill order (oldest first), nothing else.
     oldest = focus == "backlog"
     picks, skips = engine.pick(preferences.at_speed(bl["episodes"], speed), minutes, oldest=oldest)
-    longer = engine.a_little_longer(picks, skips, minutes)
-    # Picks and "a little longer" options get play links, so only they need Apple's lookup.
-    picks = links.add_apple_episode_urls(picks)
-    longer = links.add_apple_episode_urls(longer)
-    slim = _slim
-    run_id = db.save_run(
-        user["id"],
-        minutes,
-        engine.engine_name(oldest),
-        {
-            "picks": slim(picks),
-            "skips": slim(skips),
-            "longer": [{**slim([e])[0], "total_min": e["total_min"], "extra_min": e["extra_min"]}
-                       for e in longer],
-            "failed": bl["failed"],
-            "backlog_size": len(bl["episodes"]),
-            "shows": bl["shows"],
-            "speed": speed,
-            "window_days": days,  # how far back this run looked (the results page says so)
-            "older_loading": bl["older_loading"],  # shows whose older episodes were still loading
-            "preferences": prefs,  # kept with the run, for a future picker and evaluation
-        },
-    )
+    run_id = _save_triage(user, minutes, picks, skips, engine.engine_name(oldest), prefs, {
+        "failed": bl["failed"],
+        "backlog_size": len(bl["episodes"]),
+        "shows": bl["shows"],
+        "window_days": days,  # how far back this run looked (the results page says so)
+        "older_loading": bl["older_loading"],  # shows whose older episodes were still loading
+    })
     return redirect(f"/v2/run/{run_id}")
+
+
+def _save_triage(user, minutes, picks, skips, name: str, prefs: dict, extra: dict) -> str:
+    """Store one set of picks as a run (the same for Today and for "Pick from my saved").
+    Picks and "a little longer" options get play links, so only they need Apple's lookup."""
+    longer = links.add_apple_episode_urls(engine.a_little_longer(picks, skips, minutes))
+    picks = links.add_apple_episode_urls(picks)
+    return db.save_run(user["id"], minutes, name, {
+        "picks": _slim(picks),
+        "skips": _slim(skips),
+        "longer": [{**_slim([e])[0], "total_min": e["total_min"], "extra_min": e["extra_min"]}
+                   for e in longer],
+        "speed": prefs["listening_speed"],
+        "preferences": prefs,  # kept with the run, for a future picker and evaluation
+        **extra,
+    })
 
 
 @bp.get("/preferences")
@@ -435,7 +435,7 @@ def run(user, run_id):
     if r is None:
         return _page("Podsen", '<p>That run was not found. <a href="/v2/today">Start over</a></p>', 404, True)
     body = app_views.results(r, db.heard_ids(user["id"]), db.latest_feedback(r["id"]), _csrf_token(),
-                             note=db.latest_note(r["id"]))
+                             note=db.latest_note(r["id"]), saved=db.saved_ids(user["id"]))
     return _page("Podsen · today", body, logged_in=True)
 
 
@@ -465,7 +465,7 @@ def _after_heard(user, r, episode: str) -> None:
     pool = [x for x in p["skips"] if x["id"] not in heard_now]  # heard ones leave the skips too
     added = []
     if gone is not None:
-        oldest = r["engine"] == engine.BACKLOG_ENGINE_NAME
+        oldest = engine.is_oldest_first(r["engine"])
         added = _slim(links.add_apple_episode_urls(engine.refill(kept, pool, r["budget"], oldest)))
         taken = {x["id"] for x in added}
         pool = [x for x in pool if x["id"] not in taken]
@@ -499,6 +499,72 @@ def run_extend(user):
     p["longer"] = _longer_options(p["picks"], p["skips"], new_budget)
     db.update_run(user["id"], r["id"], new_budget, p)
     return redirect(f"/v2/run/{r['id']}")
+
+
+# --- saved for later ---------------------------------------------------------------------
+
+@bp.get("/saved")
+@login_required
+def saved_page(user):
+    body = app_views.saved_page(db.list_saved(user["id"]), _csrf_token(), full=bool(request.args.get("full")))
+    return _page("Podsen · saved", body, logged_in=True)
+
+
+@bp.post("/saved/add")
+@login_required
+def saved_add(user):
+    """"Save for later" on a card. Only an episode this user's own run showed, and the copy
+    is taken from the run, never from the form, so a form can't save arbitrary text."""
+    r = _run_or_404(user, request.form.get("run"))
+    if r is None:
+        return redirect("/v2/today")
+    p, episode = r["payload"], request.form.get("episode") or ""
+    ep = next((e for e in p["picks"] + p["skips"] + (p.get("longer") or []) if e["id"] == episode), None)
+    if ep is not None and not db.save_episode(user["id"], ep):
+        return redirect("/v2/saved?full=1")
+    return redirect(f"/v2/run/{r['id']}")
+
+
+@bp.post("/saved/remove")
+@login_required
+def saved_remove(user):
+    db.unsave_episode(user["id"], request.form.get("episode") or "")  # owner's row only
+    return redirect("/v2/saved")
+
+
+@bp.post("/saved/heard")
+@login_required
+def saved_heard(user):
+    """"Already heard" on the Saved page: only an episode that is on this user's list. Marking
+    it heard also takes it off the list (db.mark_heard)."""
+    episode = request.form.get("episode") or ""
+    if episode in db.saved_ids(user["id"]):
+        db.mark_heard(user["id"], episode)
+    return redirect("/v2/saved")
+
+
+@bp.post("/saved/pick")
+@login_required
+def saved_pick(user):
+    """"Pick from my saved": the same time rules, but only from the saved list, oldest first.
+    Speed counts as it does everywhere; the time stays a hard cap."""
+    pool = db.list_saved(user["id"])
+    if not pool:
+        return redirect("/v2/saved")
+    minutes = _minutes()
+    if minutes is None:
+        body = app_views.saved_page(pool, _csrf_token(),
+                                    error="Time must be a whole number of minutes from 1 to 600.")
+        return _page("Podsen · saved", body, 400, logged_in=True)
+    prefs = db.get_preferences(user["id"]) or preferences.DEFAULTS
+    picks, skips = engine.pick(preferences.at_speed(pool, prefs["listening_speed"]), minutes, oldest=True)
+    run_id = _save_triage(user, minutes, picks, skips, engine.SAVED_ENGINE_NAME, prefs, {
+        "source": "saved",  # the results page words itself for the saved list, not for a window
+        "failed": [],
+        "backlog_size": len(pool),
+        "shows": len({e["itunes_id"] or e["show"] for e in pool}),
+    })
+    return redirect(f"/v2/run/{run_id}")
 
 
 @bp.post("/feedback")
