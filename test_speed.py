@@ -301,7 +301,10 @@ def _post_forms(client, html, skip=()):
             continue
         if action in ("/v2/logout", "/v2/account/delete") and action in out:
             continue  # the session is gone after the first one (Account has two Log out forms)
-        r = client.post(action, data=_form_data(f), csrf=False)  # only the form's own csrf field
+        data = _form_data(f)
+        if action == "/v2/shows/import":
+            data["names"] = "Show A"  # what a person types; an empty import is a 400 with a message
+        r = client.post(action, data=data, csrf=False)  # only the form's own csrf field
         assert r.status_code in (200, 302), (action, r.status_code)
         out.append(action)
     return out
@@ -319,7 +322,7 @@ def test_every_form_still_posts_without_javascript(client, supa, net):
     login(client)
     posted += _post_forms(client, client.get("/v2/account").get_data(as_text=True),
                           skip=("/v2/logout",))                  # then Delete account
-    for action in ("/v2/heard", "/v2/feedback", "/v2/today", "/v2/shows/add-many", "/v2/shows/remove",
+    for action in ("/v2/heard", "/v2/feedback", "/v2/today", "/v2/shows/add-many", "/v2/shows/remove", "/v2/shows/import",
                    "/v2/preferences", "/v2/logout", "/v2/account/delete"):
         assert action in posted, action
 

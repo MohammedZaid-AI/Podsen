@@ -12,7 +12,7 @@ from functools import wraps
 
 from flask import Blueprint, current_app, redirect, request, session
 
-from v2 import app_views, auth, backlog, db, engine, itunes, links, preferences, refresh, trending
+from v2 import app_views, auth, backlog, db, engine, importer, itunes, links, preferences, refresh, timing, trending
 
 bp = Blueprint("v2", __name__, url_prefix="/v2")
 
@@ -324,6 +324,29 @@ def shows_add_many(user):
     if len(db.list_shows(user["id"])) >= app_views.MIN_SHOWS:
         return redirect(f"/v2/today?added={added}&skipped={skipped}")
     return redirect(f"/v2/{back}?added={added}&skipped={skipped}&country={code}")
+
+
+@bp.post("/shows/import")
+@login_required
+def shows_import(user):
+    """Bring shows over in one step: an OPML file from another podcast app, or pasted names.
+    Each is looked up by name on Apple and shown with a checkbox; "Add selected" then posts
+    only iTunes ids to the usual add path. A URL in the file is never fetched."""
+    upload = request.files.get("opml")
+    try:
+        if upload and upload.filename:
+            items = importer.parse_opml(upload.read(importer.MAX_FILE_BYTES + 1))
+        else:
+            items = importer.parse_names((request.form.get("names") or "")[:20000])
+    except importer.ImportError_ as e:
+        return _shows_page(user, error=str(e), status=400)
+    if not items:
+        return _shows_page(user, error="Choose an OPML file or paste at least one show name.", status=400)
+    with timing.measure("apple", n=min(len(items), importer.MAX_IMPORT)):
+        found, left = importer.match(items)
+    have = {s["itunes_id"] for s in db.list_shows(user["id"])}
+    body = app_views.import_results(found, left, have, _csrf_token())
+    return _page("Podsen · import shows", body, logged_in=True)
 
 
 @bp.post("/shows/remove")

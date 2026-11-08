@@ -49,6 +49,8 @@ _STYLE = """<style>
   .row input[type=search] { flex: 1 1 auto; min-width: 0; width: auto; }
   .row button { flex: none; }
   .field { margin: 0 0 14px; }
+  details.import { margin: 4px 0 8px; }
+  input[type=file] { display: block; width: 100%; min-height: 44px; padding: 8px 0; color: #e9e9ec; font: inherit; }
   .field > span { display: block; color: #9aa0a6; font-size: 14px; margin-bottom: 4px; }
   .err { border: 1px solid #6b2a33; background: #2a1418; color: #f1c4cb;
     border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 14px; }
@@ -336,9 +338,84 @@ some from the trending list.</p>
   <input type="search" name="q" value="{esc(query)}" placeholder="Search podcasts" required maxlength="100">
   <button>Search</button>
 </form>
+{import_form(csrf)}
 {_error(error)}
 {found}
 {trend}"""
+
+
+def import_form(csrf: str) -> str:
+    """Bring every show over at once: an OPML file, or names pasted one per line."""
+    return f"""<details class="import"><summary>Import from another app</summary>
+<form method="post" action="/v2/shows/import" enctype="multipart/form-data" class="stack" data-busy-note="Finding your shows on Apple...">{_csrf(csrf)}
+  <p class="meta">Many podcast apps can export your subscriptions as an OPML file (look for
+  Export or OPML in their settings). If yours can't, paste the show names instead.</p>
+  <label class="field"><span>OPML file</span>
+    <input type="file" name="opml" accept=".opml,.xml,text/xml,text/x-opml,application/xml"></label>
+  <label class="field"><span>Or show names, one per line</span>
+    <textarea name="names" rows="5" maxlength="20000" placeholder="Huberman Lab&#10;Lex Fridman Podcast"></textarea></label>
+  <p class="busy-note" hidden aria-live="polite"></p>
+  <button>Find these shows</button>
+</form></details>"""
+
+
+_HOW = {
+    "feed": "Same feed as in your file",
+    "name": "Same name",
+    "guess": "Closest match for &ldquo;{name}&rdquo;, check it is right",
+}
+
+
+def import_results(found: list[dict], left: int, have: set, csrf: str) -> str:
+    """Each imported show with Apple's match. Sure matches start ticked, a guess does not;
+    the form posts only iTunes ids to the usual "Add selected" path."""
+    rows, missing, failed, addable = [], [], [], 0
+    seen = set()
+    for f in found:
+        s = f.get("show")
+        if f["how"] == "error":
+            failed.append(f["name"])
+            continue
+        if s is None:
+            missing.append(f["name"])
+            continue
+        if s["itunes_id"] in seen:
+            continue
+        seen.add(s["itunes_id"])
+        how = _HOW[f["how"]].format(name=esc(f["name"]))
+        name = (f'<strong>{esc(s["name"])}</strong><br><span class="meta">{esc(s.get("artist"))}</span>'
+                f'<br><span class="meta">{how}</span>')
+        if s["itunes_id"] in have:
+            rows.append(f"""<div class="show"><span class="nobox"></span>{_cover(s.get('artwork_url'))}
+  <div class="grow">{name}<br><span class="meta ok">Already added</span></div></div>""")
+            continue
+        addable += 1
+        checked = " checked" if f["how"] in ("feed", "name") else ""
+        rows.append(f"""<label class="show">
+  <input type="checkbox" name="itunes_id" value="{esc(s['itunes_id'])}"{checked}>{_cover(s.get('artwork_url'))}<div class="grow">{name}</div></label>""")
+
+    matched = len(rows)
+    head = f"<h2>Found {matched} of {len(found)} show{'s' if len(found) != 1 else ''}</h2>"
+    notes = []
+    if missing:
+        notes.append(f'<p class="warn">Not found on Apple Podcasts: {esc(", ".join(missing))}. '
+                     "Try searching for them by another name.</p>")
+    if failed:
+        notes.append(f'<p class="warn">Could not check {len(failed)} show{"s" if len(failed) != 1 else ""} '
+                     f'right now ({esc(", ".join(failed))}). Import them again in a minute.</p>')
+    if left:
+        notes.append(f'<p class="warn">Only the first {len(found)} were checked. '
+                     f'Import again with the other {left} after adding these.</p>')
+    button = '<p style="margin-top:14px"><button>Add selected</button></p>' if addable else ""
+    return f"""{head}
+<p class="meta">Ticked shows matched for sure. Untick any you don't want; tick a guess only if it is right.</p>
+{"".join(notes)}
+<form method="post" action="/v2/shows/add-many">{_csrf(csrf)}
+  <input type="hidden" name="back" value="shows">
+  {"".join(rows)}
+  {button}
+</form>
+<p class="meta" style="margin-top:16px"><a href="/v2/shows">Back to My shows</a></p>"""
 
 
 # --- listening preferences -----------------------------------------------------------------

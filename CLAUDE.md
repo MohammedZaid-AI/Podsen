@@ -17,7 +17,7 @@ Wants help deciding, not permission to prune.
 ```bash
 .venv\Scripts\Activate.ps1
 flask --app app run --port 3000      # `flask run` reads .env; `python app.py` does NOT
-python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 377 tests, no network
+python -m pytest test_rank.py test_v2.py test_v2_app.py test_engine.py test_production.py test_speed.py -q   # 382 tests, no network
 python -m v2.report                  # compare pick methods on data/labels/
 python -m v2.report --dir v2/sample_data   # same, on the bundled FAKE samples
 python -m v2.migrate_sqlite --dry-run      # copy old local SQLite data into Postgres
@@ -43,6 +43,7 @@ restarted has produced false "the fix didn't work" conclusions before.
 | `v2/db.py` | SQLAlchemy Core: Postgres via `DATABASE_URL`, else SQLite `DATA_DIR/podsen_v2.db` |
 | `v2/supabase_setup.sql` | tables + RLS for Supabase; run once in the SQL editor |
 | `v2/migrate_sqlite.py` | one-off copy of the old email+password SQLite data into Postgres |
+| `v2/importer.py` | show import: OPML file or pasted names, matched by name on Apple; file URLs never fetched |
 | `v2/itunes.py` | Apple iTunes search/lookup (batched), a show's episode list, top chart |
 | `v2/trending.py` | trending shows per country (in/us/gb), Apple's chart cached 12 h |
 | `v2/rss.py` | RSS → episodes (stdlib). Durations round UP: the budget is a hard cap |
@@ -112,7 +113,8 @@ are labelled as searches.
   browser=...`: coarse platform/browser only, never the user agent, IP or user.
 - **No client JS in the app except the small progressive enhancement script** (`views.PROGRESSIVE_JS`,
   under 30 lines, no libraries: busy state on submit, no double submits, restored on
-  Back), **and every page must work without it.** Forms are plain HTML forms; the
+  Back; when an episode ends in a pick card's player it sends that card's own "Already heard"
+  form, unchanged, and plays the next pick), **and every page must work without it.** Forms are plain HTML forms; the
   script never changes what a form sends. No build step, no templates directory;
   server-rendered strings only.
 - No mock data in the product flow. Test doubles are fine; the FAKE samples are for
@@ -173,6 +175,15 @@ are labelled as searches.
   wanted to clear his backlog, not read new releases. Window and order are enforced in code
   (`backlog.build(days=)`, `engine.pick(oldest=)`); no number reaches the prompt. Runs store
   `window_days`.
+- **Import shows** (`/v2/shows/import`, "Import from another app" on My shows): an OPML file
+  (`MAX_CONTENT_LENGTH` 2 MB, `importer` refuses over 1 MB, a DOCTYPE or entities) or names pasted one
+  per line. The first `importer.MAX_IMPORT` (25) are searched BY NAME on Apple, 4 at a time; a feed URL
+  in the file is only compared with Apple's, never fetched. Results page: same feed or same name start
+  ticked, a closest guess starts unticked, already added and not found are said; "Add selected" posts
+  iTunes ids to `/v2/shows/add-many` (the one add path). Nothing is added before that tap.
+- **Auto heard + autoplay:** finishing an episode in a pick's in-page player marks it heard (same
+  form, so the run refills as with the button) and starts the next pick's player. Untested on a
+  locked phone screen; the button still works without JS.
 - **One add path:** `_add_shows()` in `web.py` (single Add and Add selected) looks up
   every feed URL from Apple; the form's own values are never stored.
 - **Pick rule (`newest_first_varied`):** newest-first fill, at most one episode per

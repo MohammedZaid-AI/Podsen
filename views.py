@@ -44,6 +44,11 @@ window.addEventListener("pageshow", function () {
     if (note) note.hidden = true;
   });
 });
+document.addEventListener("ended", function (e) {  // finished in Podsen's player: its own "Already heard" form is sent, the next pick plays
+  var c = e.target.closest(".pick"), f = c && c.querySelector('form[action="/v2/heard"]'), a = [].slice.call(document.querySelectorAll(".pick audio")), n = a[a.indexOf(e.target) + 1];
+  if (f) fetch(f.action, {method: "POST", body: new FormData(f), redirect: "manual"}).then(function () { f.outerHTML = '<span class="meta ok">Marked as heard</span>'; });
+  if (n) { n.closest("details").open = true; n.play(); }
+}, true);
 </script>"""
 
 

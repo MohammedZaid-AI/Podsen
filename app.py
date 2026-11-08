@@ -88,6 +88,7 @@ app.config.update(
     SESSION_COOKIE_SECURE=is_production(),  # HTTPS-only cookie in production
     PREFERRED_URL_SCHEME="https" if is_production() else "http",
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),  # V2 logins last 30 days
+    MAX_CONTENT_LENGTH=2 * 1024 * 1024,  # the biggest form is an OPML upload (importer caps it at 1 MB)
 )
 app.register_blueprint(v2_bp)
 # Each request uses one pooled database connection; give it back when the request ends.

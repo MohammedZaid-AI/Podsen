@@ -1258,6 +1258,7 @@ def test_every_v2_post_without_a_valid_token_is_rejected(client, supa):
         ("/v2/today", {"minutes": "30"}),
         ("/v2/heard", {"run": run_id, "episode": "a1"}),
         ("/v2/run/extend", {"run": run_id, "episode": "a2"}),
+        ("/v2/shows/import", {"names": "Second Show"}),
         ("/v2/saved/add", {"run": run_id, "episode": "a1"}),
         ("/v2/saved/remove", {"episode": "a1"}),
         ("/v2/saved/heard", {"episode": "a1"}),
@@ -1922,3 +1923,116 @@ def test_deleting_the_account_deletes_the_saved_list(client):
     assert len(db.list_saved(uid)) == 2
     r = client.post("/v2/account/delete", data={"confirm": "DELETE"})
     assert r.status_code == 200 and db.list_saved(uid) == []
+
+
+# --- Import shows from another app ------------------------------------------------------------
+
+from io import BytesIO
+from v2 import importer
+
+OPML = f"""<?xml version="1.0" encoding="UTF-8"?>
+<opml version="1.0"><head><title>My podcasts</title></head><body>
+<outline text="feeds">
+  <outline type="rss" text="Second Show" xmlUrl="http://www.feeds.example/b/" />
+  <outline type="rss" title="{esc(TRICKY_SHOW)}" text="ignored" xmlUrl="https://feeds.example/a" />
+  <outline type="rss" text="Second Show again" xmlUrl="https://feeds.example/b" />
+  <outline type="rss" text="Thrid Shw" xmlUrl="http://127.0.0.1:9/private-feed" />
+  <outline type="rss" text="Nothing Like This" xmlUrl="https://nowhere.example/feed" />
+</outline></body></opml>""".encode()
+
+
+def _search_by_term(monkeypatch, net):
+    """Apple search that matches on words in the name; lookups go to the usual fake."""
+    base = itunes._get_json
+    calls = []
+
+    def fake(url):
+        if url.startswith(itunes.SEARCH_URL):
+            term = unquote(url.split("term=")[1].split("&")[0]).replace("+", " ").lower()
+            calls.append(term)
+            if "error" in term:
+                raise TimeoutError("apple search timed out")
+            words = [w for w in term.split() if len(w) > 3]
+            hits = [cid for cid, c in CATALOG.items() if any(w in c["name"].lower() for w in words)]
+            if "thrid" in term:  # a typo: Apple returns something close, never certain
+                hits = ["103"]
+            return {"results": [_itunes_item(cid) for cid in hits]}
+        return base(url)
+
+    monkeypatch.setattr(itunes, "_get_json", fake)
+    return calls
+
+
+def test_opml_is_read_without_folders_repeats_or_tricks():
+    items = importer.parse_opml(OPML)
+    assert [i["name"] for i in items] == ["Second Show", TRICKY_SHOW, "Thrid Shw", "Nothing Like This"]
+    assert items[0]["feed_url"] == "http://www.feeds.example/b/"
+    bomb = b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><opml><body><outline text="&a;" xmlUrl="https://x"/></body></opml>'
+    for bad, says in ((bomb, "plain OPML"), (b"<rss></rss>", "not an OPML"), (b"not xml at all", "could not be read"),
+                      (b"<opml>" + b" " * importer.MAX_FILE_BYTES + b"</opml>", "too big")):
+        with pytest.raises(importer.ImportError_) as e:
+            importer.parse_opml(bad)
+        assert says in str(e.value)
+    assert [i["name"] for i in importer.parse_names("  Huberman   Lab \n\nhuberman lab\nAcquired\n")] == ["Huberman Lab", "Acquired"]
+
+
+def test_matching_prefers_the_same_feed_then_the_same_name_and_marks_guesses(monkeypatch, net):
+    _search_by_term(monkeypatch, net)
+    found, left = importer.match(importer.parse_opml(OPML) + [{"name": "error case", "feed_url": None}])
+    how = {f["name"]: (f["how"], f["show"] and f["show"]["itunes_id"]) for f in found}
+    assert how["Second Show"] == ("feed", "102"), "same feed, loosely compared"
+    assert how[TRICKY_SHOW] == ("feed", "101")
+    assert how["Thrid Shw"] == ("guess", "103"), "a name that is close is only a guess"
+    assert how["Nothing Like This"] == ("none", None)
+    assert how["error case"][0] == "error" and left == 0
+    many = [{"name": f"Show {i}", "feed_url": None} for i in range(importer.MAX_IMPORT + 7)]
+    found, left = importer.match(many)
+    assert len(found) == importer.MAX_IMPORT and left == 7
+
+
+def test_import_page_lists_matches_and_only_adds_what_is_ticked(client, monkeypatch, net):
+    uid = login(client)
+    add(client, "101")
+    calls = _search_by_term(monkeypatch, net)
+    r = client.post("/v2/shows/import", data={"opml": (BytesIO(OPML), "podcasts.opml")},
+                    content_type="multipart/form-data")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200 and "Found 3 of 4 shows" in html
+    assert 'name="itunes_id" value="102" checked' in html, "a feed match starts ticked"
+    assert 'name="itunes_id" value="103">' in html and "check it is right" in html, "a guess starts unticked"
+    assert "Already added" in html and 'value="101"' not in html, "a show you have is not offered again"
+    assert "Not found on Apple Podcasts: Nothing Like This" in html
+    assert esc(TRICKY_SHOW) in html and TRICKY_SHOW not in html
+    assert not any("127.0.0.1" in u or "nowhere.example" in u for u in net["fetches"]), "file URLs are never fetched"
+    assert all("127.0.0.1" not in c for c in calls), "only names go to Apple"
+    assert db.list_shows(uid) and len(db.list_shows(uid)) == 1, "nothing is added until the listener confirms"
+
+    r = client.post("/v2/shows/add-many", data={"itunes_id": ["102"], "back": "shows"})
+    assert r.status_code == 302
+    assert {s["itunes_id"] for s in db.list_shows(uid)} == {"101", "102"}
+    assert {s["feed_url"] for s in db.list_shows(uid)} == {"https://feeds.example/a", "https://feeds.example/b"}
+
+
+def test_import_from_pasted_names_and_its_errors(client, monkeypatch, net):
+    login(client)
+    _search_by_term(monkeypatch, net)
+    html = client.post("/v2/shows/import", data={"names": "Second Show\nThird Show"}).get_data(as_text=True)
+    assert "Found 2 of 2 shows" in html and html.count(" checked") == 2, "same names start ticked"
+    r = client.post("/v2/shows/import", data={"names": "  \n "})
+    assert r.status_code == 400 and "paste at least one show name" in r.get_data(as_text=True)
+    r = client.post("/v2/shows/import", data={"opml": (BytesIO(b"<rss/>"), "x.xml")}, content_type="multipart/form-data")
+    assert r.status_code == 400 and "not an OPML file" in r.get_data(as_text=True)
+    page = client.get("/v2/shows").get_data(as_text=True)
+    assert 'action="/v2/shows/import" enctype="multipart/form-data"' in page and "Import from another app" in page
+
+
+def test_the_player_marks_heard_and_plays_the_next_pick_with_the_same_form(client, net):
+    js = views.PROGRESSIVE_JS
+    assert '"ended"' in js and 'form[action="/v2/heard"]' in js and "new FormData(f)" in js, "the card's own form, unchanged"
+    assert ".pick audio" in js and ".play()" in js
+    login(client)
+    add(client, "101", "102")
+    _, run_id = run_today(client, 50)
+    html = client.get(f"/v2/run/{run_id}").get_data(as_text=True)
+    pick = html.split('class="card pick"')[1]
+    assert "<audio" in pick and 'action="/v2/heard"' in pick, "the player and its heard form sit in the same card"
